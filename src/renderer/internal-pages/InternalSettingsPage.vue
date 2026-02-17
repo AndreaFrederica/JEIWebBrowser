@@ -15,6 +15,10 @@ const props = defineProps<{
   onSettingsSaved: (value: SettingsPayload) => void
 }>()
 
+const emit = defineEmits<{
+  navigate: [url: string]
+}>()
+
 const shortcut = ref('')
 const homePage = ref('jei://home')
 const alwaysOnTop = ref(false)
@@ -144,6 +148,10 @@ async function loadSettings(): Promise<void> {
   }
 }
 
+function toggleDevTools(): void {
+  ipcRenderer.send('toggle-devtools')
+}
+
 async function saveSettings(): Promise<void> {
   const payload: SettingsPayload = {
     shortcut: shortcut.value.trim(),
@@ -227,6 +235,26 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="status">{{ status }}</div>
+
+    <div class="section-divider"></div>
+
+    <div class="section">
+      <h2>数据管理</h2>
+      <p class="section-desc">查看和管理浏览器的持久化存储数据</p>
+      <button class="secondary" @click="emit('navigate', 'jei://storage')">
+        打开存储查看器
+      </button>
+    </div>
+
+    <div class="section-divider"></div>
+
+    <div class="section">
+      <h2>开发者工具</h2>
+      <p class="section-desc">打开浏览器内部界面的开发者工具</p>
+      <button class="secondary" @click="toggleDevTools">
+        切换 DevTools (F12)
+      </button>
+    </div>
   </div>
 </template>
 
@@ -296,5 +324,25 @@ label {
   font-size: 12px;
   min-height: 18px;
   opacity: 0.85;
+}
+
+.section-divider {
+  margin: 28px 0;
+  border-top: 1px solid #2d2d2d;
+}
+
+.section {
+  margin-top: 16px;
+}
+
+.section h2 {
+  font-size: 18px;
+  margin: 0 0 8px;
+}
+
+.section-desc {
+  font-size: 13px;
+  opacity: 0.7;
+  margin: 0 0 12px;
 }
 </style>

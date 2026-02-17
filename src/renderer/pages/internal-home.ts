@@ -2,6 +2,7 @@ export const INTERNAL_HOME = 'jei://home'
 export const INTERNAL_BOOKMARKS = 'jei://bookmarks'
 export const INTERNAL_HISTORY = 'jei://history'
 export const INTERNAL_SETTINGS = 'jei://settings'
+export const INTERNAL_STORAGE = 'jei://storage'
 
 export interface HomeLink {
   group: 'mirrors' | 'friends' | 'sources'
@@ -25,7 +26,8 @@ export function isInternalUrl(value: string): boolean {
     value === INTERNAL_HOME ||
     value === INTERNAL_BOOKMARKS ||
     value === INTERNAL_HISTORY ||
-    value === INTERNAL_SETTINGS
+    value === INTERNAL_SETTINGS ||
+    value === INTERNAL_STORAGE
   )
 }
 
@@ -33,6 +35,7 @@ export function getInternalTitle(value: string): string {
   if (value === INTERNAL_BOOKMARKS) return '书签管理'
   if (value === INTERNAL_HISTORY) return '历史记录'
   if (value === INTERNAL_SETTINGS) return '设置'
+  if (value === INTERNAL_STORAGE) return '存储查看器'
   return 'JEI Web'
 }
 

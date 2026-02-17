@@ -4,6 +4,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Clock3,
+  Database,
   Home,
   Maximize2,
   Minimize2,
@@ -13,7 +14,7 @@ import {
   X
 } from 'lucide-vue-next'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { INTERNAL_BOOKMARKS, INTERNAL_HISTORY, INTERNAL_HOME, INTERNAL_SETTINGS } from '../pages/internal-home'
+import { INTERNAL_BOOKMARKS, INTERNAL_HISTORY, INTERNAL_HOME, INTERNAL_SETTINGS, INTERNAL_STORAGE } from '../pages/internal-home'
 import type { TabItem } from '../types/browser'
 
 const props = defineProps<{
@@ -46,7 +47,8 @@ function isInternalTab(tab: TabItem): boolean {
     tab.src === INTERNAL_HOME ||
     tab.src === INTERNAL_BOOKMARKS ||
     tab.src === INTERNAL_HISTORY ||
-    tab.src === INTERNAL_SETTINGS
+    tab.src === INTERNAL_SETTINGS ||
+    tab.src === INTERNAL_STORAGE
   )
 }
 
@@ -114,6 +116,7 @@ onBeforeUnmount(() => {
             <Bookmark v-else-if="tab.src === INTERNAL_BOOKMARKS" :size="14" />
             <Clock3 v-else-if="tab.src === INTERNAL_HISTORY" :size="14" />
             <Settings v-else-if="tab.src === INTERNAL_SETTINGS" :size="14" />
+            <Database v-else-if="tab.src === INTERNAL_STORAGE" :size="14" />
             <span v-else>{{ tabInitial(tab) }}</span>
           </span>
           <span v-if="!(props.tabLayout === 'vertical' && props.collapsed)" class="tab-title">{{ tab.title }}</span>

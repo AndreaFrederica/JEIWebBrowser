@@ -138,69 +138,80 @@ declare global {
    * Provides persistent storage for webview pages, similar to localStorage
    * but persisted across sessions using the browser's electron-store backend.
    *
-   * Data is isolated by origin (protocol + host + port).
+   * Default behavior is origin-isolated storage (protocol + host + port).
+   * If a namespace is provided, data is stored in that namespace instead
+   * of the current origin bucket.
    */
   interface JEIStorage {
     /**
      * Retrieves a value from storage
      * @param key - The key to retrieve
+     * @param namespace - Optional namespace; when provided, reads from namespace storage
      * @returns Promise resolving to the stored value, or null if not found
      *
      * @example
      * const value = await window.JEIStorage.getItem('username')
+     * const shared = await window.JEIStorage.getItem('token', 'shared-auth')
      */
-    getItem(key: string): Promise<string | null>
+    getItem(key: string, namespace?: string): Promise<string | null>
 
     /**
      * Stores a key-value pair
      * @param key - The key to store under
      * @param value - The value to store (will be converted to string)
+     * @param namespace - Optional namespace; when provided, writes to namespace storage
      * @returns Promise that resolves when the value is stored
      *
      * @example
      * await window.JEIStorage.setItem('username', 'player1')
      * await window.JEIStorage.setItem('level', '42')
+     * await window.JEIStorage.setItem('token', 'abc123', 'shared-auth')
      */
-    setItem(key: string, value: string): Promise<void>
+    setItem(key: string, value: string, namespace?: string): Promise<void>
 
     /**
      * Removes a single item from storage
      * @param key - The key to remove
+     * @param namespace - Optional namespace; when provided, removes from namespace storage
      * @returns Promise that resolves when the item is removed
      *
      * @example
      * await window.JEIStorage.removeItem('cachedData')
      */
-    removeItem(key: string): Promise<void>
+    removeItem(key: string, namespace?: string): Promise<void>
 
     /**
-     * Clears all items for the current origin
+     * Clears all items for current origin, or for a namespace if provided
+     * @param namespace - Optional namespace; when provided, clears that namespace
      * @returns Promise that resolves when storage is cleared
      *
      * @example
      * await window.JEIStorage.clear()
+     * await window.JEIStorage.clear('shared-auth')
      */
-    clear(): Promise<void>
+    clear(namespace?: string): Promise<void>
 
     /**
-     * Gets all keys stored for the current origin
+     * Gets all keys stored for current origin, or for a namespace if provided
+     * @param namespace - Optional namespace; when provided, lists namespace keys
      * @returns Promise resolving to an array of keys
      *
      * @example
      * const keys = await window.JEIStorage.keys()
      * console.log('Stored keys:', keys)
      */
-    keys(): Promise<string[]>
+    keys(namespace?: string): Promise<string[]>
 
     /**
-     * Gets the number of items stored for the current origin
+     * Gets item count for current origin, or for a namespace if provided
+     * @param namespace - Optional namespace; when provided, counts namespace items
      * @returns Promise resolving to the count of stored items
      *
      * @example
      * const count = await window.JEIStorage.getLength()
      * console.log('Total items:', count)
      */
-    getLength(): Promise<number>
+    getLength(namespace?: string): Promise<number>
   }
 
   /**

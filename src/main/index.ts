@@ -7,6 +7,7 @@ import {
   Menu,
   nativeImage,
   screen,
+  shell,
   Tray,
   type ContextMenuParams,
   type MenuItemConstructorOptions,
@@ -820,6 +821,29 @@ ipcMain.on('toggle-always-on-top', (_event, flag: boolean) => {
   }
 })
 
+ipcMain.on('toggle-devtools', () => {
+  if (mainWindow) {
+    if (mainWindow.webContents.isDevToolsOpened()) {
+      mainWindow.webContents.closeDevTools()
+    } else {
+      mainWindow.webContents.openDevTools({ mode: 'detach' })
+    }
+  }
+})
+
+// Open DevTools for a specific webview by its WebContents ID
+ipcMain.on('open-webview-devtools', (_event, webContentsId: number) => {
+  const { webContents } = require('electron')
+  const contents = webContents.fromId(webContentsId)
+  if (contents) {
+    if (contents.isDevToolsOpened()) {
+      contents.closeDevTools()
+    } else {
+      contents.openDevTools({ mode: 'detach' })
+    }
+  }
+})
+
 ipcMain.on('get-bookmarks', (event) => {
   event.reply('bookmarks-data', store.get('bookmarks', []))
 })
@@ -973,53 +997,168 @@ ipcMain.handle('get-connection-certificate', async (_event, targetUrl: string) =
 })
 
 // WebView persistent storage API
-// Store key-value pairs with the origin as the namespace
+// Store key-value pairs with origin scope by default, or namespace scope when provided.
 const webviewStore = new Store<any>({ name: 'webview-storage' })
+const ORIGIN_STORAGE_PREFIX = 'storage:'
+const NAMESPACE_STORAGE_PREFIX = 'storage-ns:'
+const NAMESPACE_SCOPE_PREFIX = 'namespace://'
 
-// Get storage key for a specific origin
-function getStorageKey(origin: string, key: string): string {
-  return `storage:${origin}:${key}`
+function normalizeNamespace(namespace?: string | null): string | null {
+  if (typeof namespace !== 'string') return null
+  const trimmed = namespace.trim()
+  return trimmed.length > 0 ? trimmed : null
 }
 
-// Get all keys for a specific origin
-function getOriginKeys(origin: string): string[] {
+// Get storage key for a specific origin
+function getStorageKey(origin: string, key: string, namespace?: string | null): string {
+  const normalizedNamespace = normalizeNamespace(namespace)
+  if (normalizedNamespace) {
+    return `${NAMESPACE_STORAGE_PREFIX}${normalizedNamespace}:${key}`
+  }
+  return `${ORIGIN_STORAGE_PREFIX}${origin}:${key}`
+}
+
+// Get all keys for a specific origin or namespace
+function getScopedKeys(origin: string, namespace?: string | null): string[] {
   const allKeys = Object.keys((webviewStore.store as Record<string, unknown>) || {})
-  const prefix = `storage:${origin}:`
+  const normalizedNamespace = normalizeNamespace(namespace)
+  const prefix = normalizedNamespace
+    ? `${NAMESPACE_STORAGE_PREFIX}${normalizedNamespace}:`
+    : `${ORIGIN_STORAGE_PREFIX}${origin}:`
   return allKeys.filter((k) => k.startsWith(prefix)).map((k) => k.substring(prefix.length))
 }
 
-ipcMain.handle('webview-storage-get', async (_event, origin: string, key: string) => {
-  const storageKey = getStorageKey(origin, key)
+function clearScopedStorage(origin: string, namespace?: string | null): void {
+  const allKeys = Object.keys((webviewStore.store as Record<string, unknown>) || {})
+  const normalizedNamespace = normalizeNamespace(namespace)
+  const prefix = normalizedNamespace
+    ? `${NAMESPACE_STORAGE_PREFIX}${normalizedNamespace}:`
+    : `${ORIGIN_STORAGE_PREFIX}${origin}:`
+  for (const key of allKeys) {
+    if (key.startsWith(prefix)) {
+      webviewStore.delete(key)
+    }
+  }
+}
+
+function parseAdminScope(scope: string): { origin: string; namespace?: string } {
+  if (scope.startsWith(NAMESPACE_SCOPE_PREFIX)) {
+    const namespace = normalizeNamespace(scope.slice(NAMESPACE_SCOPE_PREFIX.length))
+    if (namespace) {
+      return { origin: '', namespace }
+    }
+  }
+  return { origin: scope }
+}
+
+ipcMain.handle('webview-storage-get', async (_event, origin: string, key: string, namespace?: string) => {
+  const storageKey = getStorageKey(origin, key, namespace)
   return webviewStore.get(storageKey, null)
 })
 
-ipcMain.handle('webview-storage-set', async (_event, origin: string, key: string, value: unknown) => {
-  const storageKey = getStorageKey(origin, key)
+ipcMain.handle('webview-storage-set', async (_event, origin: string, key: string, value: unknown, namespace?: string) => {
+  const storageKey = getStorageKey(origin, key, namespace)
   webviewStore.set(storageKey, value)
   return true
 })
 
-ipcMain.handle('webview-storage-remove', async (_event, origin: string, key: string) => {
-  const storageKey = getStorageKey(origin, key)
+ipcMain.handle('webview-storage-remove', async (_event, origin: string, key: string, namespace?: string) => {
+  const storageKey = getStorageKey(origin, key, namespace)
   webviewStore.delete(storageKey)
   return true
 })
 
-ipcMain.handle('webview-storage-clear', async (_event, origin: string) => {
+ipcMain.handle('webview-storage-clear', async (_event, origin: string, namespace?: string) => {
+  clearScopedStorage(origin, namespace)
+  return true
+})
+
+ipcMain.handle('webview-storage-keys', async (_event, origin: string, namespace?: string) => {
+  return getScopedKeys(origin, namespace)
+})
+
+ipcMain.handle('webview-storage-getLength', async (_event, origin: string, namespace?: string) => {
+  return getScopedKeys(origin, namespace).length
+})
+
+// Admin API: Get all storage data across all origins (for storage viewer)
+ipcMain.handle('webview-storage-getAll', async () => {
   const allKeys = Object.keys((webviewStore.store as Record<string, unknown>) || {})
-  const prefix = `storage:${origin}:`
+  const result: Record<string, Array<{ key: string; value: unknown }>> = {}
+
+  for (const fullKey of allKeys) {
+    const parts = fullKey.split(':')
+    let scope = ''
+    let actualKey = ''
+
+    if (fullKey.startsWith(ORIGIN_STORAGE_PREFIX)) {
+      if (parts.length < 3) continue
+      scope = parts.slice(1, -1).join(':')
+      actualKey = parts[parts.length - 1]
+    } else if (fullKey.startsWith(NAMESPACE_STORAGE_PREFIX)) {
+      if (parts.length < 3) continue
+      const namespace = parts.slice(1, -1).join(':')
+      if (!namespace) continue
+      scope = `${NAMESPACE_SCOPE_PREFIX}${namespace}`
+      actualKey = parts[parts.length - 1]
+    } else {
+      continue
+    }
+
+    const value = webviewStore.get(fullKey)
+
+    if (!result[scope]) {
+      result[scope] = []
+    }
+    result[scope].push({ key: actualKey, value })
+  }
+
+  return result
+})
+
+// Admin API: Delete a specific storage item by origin and key
+ipcMain.handle('webview-storage-admin-delete', async (_event, scope: string, key: string) => {
+  const parsed = parseAdminScope(scope)
+  const storageKey = getStorageKey(parsed.origin, key, parsed.namespace)
+  webviewStore.delete(storageKey)
+  return true
+})
+
+// Admin API: Set a specific storage item by origin and key
+ipcMain.handle('webview-storage-admin-set', async (_event, scope: string, key: string, value: unknown) => {
+  const parsed = parseAdminScope(scope)
+  const storageKey = getStorageKey(parsed.origin, key, parsed.namespace)
+  webviewStore.set(storageKey, value)
+  return true
+})
+
+// Admin API: Clear all storage for a specific origin
+ipcMain.handle('webview-storage-admin-clear-origin', async (_event, scope: string) => {
+  const parsed = parseAdminScope(scope)
+  clearScopedStorage(parsed.origin, parsed.namespace)
+  return true
+})
+
+// Admin API: Clear all storage data
+ipcMain.handle('webview-storage-admin-clear-all', async () => {
+  const allKeys = Object.keys((webviewStore.store as Record<string, unknown>) || {})
   for (const key of allKeys) {
-    if (key.startsWith(prefix)) {
+    if (key.startsWith(ORIGIN_STORAGE_PREFIX) || key.startsWith(NAMESPACE_STORAGE_PREFIX)) {
       webviewStore.delete(key)
     }
   }
   return true
 })
 
-ipcMain.handle('webview-storage-keys', async (_event, origin: string) => {
-  return getOriginKeys(origin)
-})
-
-ipcMain.handle('webview-storage-getLength', async (_event, origin: string) => {
-  return getOriginKeys(origin).length
+// Admin API: Open the storage data directory in system file manager
+ipcMain.handle('webview-storage-open-dir', async () => {
+  try {
+    // electron-store stores data in app.getPath('userData')
+    const userDataPath = app.getPath('userData')
+    await shell.openPath(userDataPath)
+    return true
+  } catch (e) {
+    console.error('Failed to open storage directory:', e)
+    return false
+  }
 })

@@ -8,7 +8,8 @@ Persistent storage API for webview pages in JEI Browser.
 
 - Data persists across browser sessions
 - Storage is backed by electron-store (file-based storage)
-- Data is isolated by origin (protocol + host + port)
+- Default scope is isolated by origin (protocol + host + port)
+- Optional namespace scope is supported for shared buckets
 - All operations are asynchronous (Promise-based)
 
 ## Availability
@@ -24,30 +25,33 @@ if (window.JEIStorage) {
 
 ## API Reference
 
-### getItem(key)
+### getItem(key, namespace?)
 
 Retrieves a value from storage.
 
 **Parameters:**
 - `key` (string) - The key to retrieve
+- `namespace` (string, optional) - Namespace scope name. If omitted, uses current origin scope.
 
 **Returns:** `Promise<string | null>` - The stored value, or `null` if not found
 
 **Example:**
 ```javascript
 const username = await window.JEIStorage.getItem('username')
+const sharedToken = await window.JEIStorage.getItem('token', 'shared-auth')
 if (username) {
   console.log('Welcome back, ' + username)
 }
 ```
 
-### setItem(key, value)
+### setItem(key, value, namespace?)
 
 Stores a key-value pair.
 
 **Parameters:**
 - `key` (string) - The key to store under
 - `value` (string) - The value to store
+- `namespace` (string, optional) - Namespace scope name. If omitted, uses current origin scope.
 
 **Returns:** `Promise<void>` - Resolves when the value is stored
 
@@ -55,55 +59,70 @@ Stores a key-value pair.
 ```javascript
 await window.JEIStorage.setItem('username', 'player1')
 await window.JEIStorage.setItem('level', '42')
+await window.JEIStorage.setItem('token', 'abc123', 'shared-auth')
 ```
 
-### removeItem(key)
+### removeItem(key, namespace?)
 
 Removes a single item from storage.
 
 **Parameters:**
 - `key` (string) - The key to remove
+- `namespace` (string, optional) - Namespace scope name. If omitted, uses current origin scope.
 
 **Returns:** `Promise<void>` - Resolves when the item is removed
 
 **Example:**
 ```javascript
 await window.JEIStorage.removeItem('cachedData')
+await window.JEIStorage.removeItem('token', 'shared-auth')
 ```
 
-### clear()
+### clear(namespace?)
 
-Removes all items for the current origin.
+Removes all items for current origin scope, or a namespace scope when specified.
+
+**Parameters:**
+- `namespace` (string, optional) - Namespace scope name. If omitted, clears current origin scope.
 
 **Returns:** `Promise<void>` - Resolves when storage is cleared
 
 **Example:**
 ```javascript
 await window.JEIStorage.clear()
+await window.JEIStorage.clear('shared-auth')
 ```
 
-### keys()
+### keys(namespace?)
 
-Gets all keys stored for the current origin.
+Gets all keys stored for current origin scope, or a namespace scope when specified.
+
+**Parameters:**
+- `namespace` (string, optional) - Namespace scope name. If omitted, lists current origin scope.
 
 **Returns:** `Promise<string[]>` - Array of all stored keys
 
 **Example:**
 ```javascript
 const keys = await window.JEIStorage.keys()
+const nsKeys = await window.JEIStorage.keys('shared-auth')
 console.log('Stored keys:', keys)
 // ['username', 'level', 'lastLogin']
 ```
 
-### getLength()
+### getLength(namespace?)
 
-Gets the number of items stored for the current origin.
+Gets the number of items stored for current origin scope, or a namespace scope when specified.
+
+**Parameters:**
+- `namespace` (string, optional) - Namespace scope name. If omitted, counts current origin scope.
 
 **Returns:** `Promise<number>` - Count of stored items
 
 **Example:**
 ```javascript
 const count = await window.JEIStorage.getLength()
+const nsCount = await window.JEIStorage.getLength('shared-auth')
 console.log(`Total items stored: ${count}`)
 ```
 
@@ -184,15 +203,25 @@ async function removeItemsByPattern(pattern) {
 }
 ```
 
-## Storage Isolation
+## Storage Scope
 
-Data is isolated by origin. Different origins cannot access each other's data:
+Without namespace, data is isolated by origin:
 
 | Origin | Accessible Data |
 |--------|-----------------|
 | `jei-home://home` | Only data stored by `jei-home://home` |
 | `https://example.com` | Only data stored by `https://example.com` |
 | `https://api.example.com` | Separate from `https://example.com` |
+
+With namespace, all callers using the same namespace read/write the same bucket:
+
+| Call | Scope |
+|------|-------|
+| `setItem('token', 'a', 'shared-auth')` | `namespace://shared-auth` |
+| `getItem('token', 'shared-auth')` | `namespace://shared-auth` |
+| `keys('shared-auth')` | `namespace://shared-auth` |
+
+If `namespace` is empty string or whitespace, it falls back to origin scope.
 
 ## Error Handling
 
@@ -235,17 +264,22 @@ if (savedState) {
    await window.JEIStorage.setItem('app:session', 'xyz123')
    ```
 
-2. **Serialize complex data** - Use JSON for objects
+2. **Use namespace intentionally** - Use stable names for shared data
+   ```javascript
+   await window.JEIStorage.setItem('token', 'abc123', 'shared-auth')
+   ```
+
+3. **Serialize complex data** - Use JSON for objects
    ```javascript
    await window.JEIStorage.setItem('data', JSON.stringify({ x: 1, y: 2 }))
    ```
 
-3. **Check for null** - `getItem` returns `null` for missing keys
+4. **Check for null** - `getItem` returns `null` for missing keys
    ```javascript
    const value = await window.JEIStorage.getItem('key') ?? 'default'
    ```
 
-4. **Clean up unused data** - Remove old keys to prevent storage bloat
+5. **Clean up unused data** - Remove old keys to prevent storage bloat
    ```javascript
    await window.JEIStorage.removeItem('tempData')
    ```
@@ -257,7 +291,7 @@ if (savedState) {
 | Persistence | Session-limited | Persistent across sessions |
 | Async | Synchronous | Asynchronous (Promise-based) |
 | Storage limit | ~5-10MB | Limited by disk space |
-| Scope | Origin | Origin |
+| Scope | Origin | Origin (default) + Namespace (optional) |
 | Backend | Browser storage | electron-store (file-based) |
 
 ## See Also

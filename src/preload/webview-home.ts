@@ -24,41 +24,25 @@ const jeiHomeApi = {
 
 // Persistent Storage API for webview pages
 // Similar to localStorage but persisted across sessions
-class JEIStorage {
-  private readonly origin: string
-
-  constructor(origin: string) {
-    this.origin = origin
-  }
-
-  async getItem(key: string): Promise<string | null> {
-    return await ipcRenderer.invoke('webview-storage-get', this.origin, key)
-  }
-
-  async setItem(key: string, value: string): Promise<void> {
-    await ipcRenderer.invoke('webview-storage-set', this.origin, key, value)
-  }
-
-  async removeItem(key: string): Promise<void> {
-    await ipcRenderer.invoke('webview-storage-remove', this.origin, key)
-  }
-
-  async clear(): Promise<void> {
-    await ipcRenderer.invoke('webview-storage-clear', this.origin)
-  }
-
-  async keys(): Promise<string[]> {
-    return await ipcRenderer.invoke('webview-storage-keys', this.origin)
-  }
-
-  async getLength(): Promise<number> {
-    return await ipcRenderer.invoke('webview-storage-getLength', this.origin)
-  }
+const currentOrigin = window.location.origin
+const normalizeNamespace = (namespace?: string): string | null => {
+  if (typeof namespace !== 'string') return null
+  const trimmed = namespace.trim()
+  return trimmed.length > 0 ? trimmed : null
 }
 
-// Create storage instance for current origin
-const currentOrigin = window.location.origin
-const jeiStorage = new JEIStorage(currentOrigin)
+const jeiStorage = {
+  getItem: (key: string, namespace?: string) =>
+    ipcRenderer.invoke('webview-storage-get', currentOrigin, key, normalizeNamespace(namespace)),
+  setItem: (key: string, value: string, namespace?: string) =>
+    ipcRenderer.invoke('webview-storage-set', currentOrigin, key, value, normalizeNamespace(namespace)),
+  removeItem: (key: string, namespace?: string) =>
+    ipcRenderer.invoke('webview-storage-remove', currentOrigin, key, normalizeNamespace(namespace)),
+  clear: (namespace?: string) => ipcRenderer.invoke('webview-storage-clear', currentOrigin, normalizeNamespace(namespace)),
+  keys: (namespace?: string) => ipcRenderer.invoke('webview-storage-keys', currentOrigin, normalizeNamespace(namespace)),
+  getLength: (namespace?: string) =>
+    ipcRenderer.invoke('webview-storage-getLength', currentOrigin, normalizeNamespace(namespace))
+}
 
 if (process.contextIsolated) {
   contextBridge.exposeInMainWorld('JEIHome', jeiHomeApi)

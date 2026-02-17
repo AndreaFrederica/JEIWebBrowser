@@ -328,6 +328,60 @@ export function useBrowserState() {
         updateAddressBar()
         updateTabTitle(tabId)
       }
+
+      // Add context menu for DevTools
+      webview.addEventListener('contextmenu', (event: Event) => {
+        const mouseEvent = event as MouseEvent
+        mouseEvent.preventDefault()
+
+        // Create context menu
+        const menu = document.createElement('div')
+        menu.className = 'webview-context-menu'
+        menu.style.cssText = `
+          position: fixed;
+          left: ${mouseEvent.clientX}px;
+          top: ${mouseEvent.clientY}px;
+          background: #252526;
+          border: 1px solid #3e3e42;
+          border-radius: 6px;
+          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+          z-index: 10000;
+          min-width: 150px;
+          overflow: hidden;
+        `
+
+        const devToolsItem = document.createElement('div')
+        devToolsItem.textContent = '打开调试工具'
+        devToolsItem.style.cssText = `
+          padding: 8px 12px;
+          cursor: pointer;
+          color: #ddd;
+          font-size: 13px;
+        `
+        devToolsItem.onmouseover = () => devToolsItem.style.background = '#3e3e42'
+        devToolsItem.onmouseout = () => devToolsItem.style.background = ''
+        devToolsItem.onclick = () => {
+          try {
+            const webContentsId = webview.getWebContentsId()
+            ipcRenderer.send('open-webview-devtools', webContentsId)
+          } catch {
+            // Ignore errors
+          }
+          document.body.removeChild(menu)
+        }
+
+        menu.appendChild(devToolsItem)
+        document.body.appendChild(menu)
+
+        // Close menu on click outside
+        const closeMenu = () => {
+          if (document.body.contains(menu)) {
+            document.body.removeChild(menu)
+          }
+          document.removeEventListener('click', closeMenu)
+        }
+        setTimeout(() => document.addEventListener('click', closeMenu), 0)
+      })
     })
 
     webview.addEventListener('page-title-updated', (event: Event) => {

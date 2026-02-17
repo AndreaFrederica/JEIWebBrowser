@@ -3,11 +3,13 @@ import InternalBookmarksPage from '../internal-pages/InternalBookmarksPage.vue'
 import InternalHistoryPage from '../internal-pages/InternalHistoryPage.vue'
 import InternalHomePage from '../internal-pages/InternalHomePage.vue'
 import InternalSettingsPage from '../internal-pages/InternalSettingsPage.vue'
+import InternalStoragePage from '../internal-pages/InternalStoragePage.vue'
 import {
   INTERNAL_BOOKMARKS,
   INTERNAL_HISTORY,
   INTERNAL_HOME,
-  INTERNAL_SETTINGS
+  INTERNAL_SETTINGS,
+  INTERNAL_STORAGE
 } from '../pages/internal-home'
 import type { SearchEngineKey } from '../utils/search'
 import type { BookmarkItem, HistoryItem, SettingsPayload } from '../types/browser'
@@ -49,6 +51,11 @@ const props = defineProps<{
     <InternalSettingsPage
       v-if="props.activeInternalUrl === INTERNAL_SETTINGS"
       :on-settings-saved="props.onSettingsSaved"
+      @navigate="props.onNavigate"
+    />
+    <InternalStoragePage
+      v-if="props.activeInternalUrl === INTERNAL_STORAGE"
+      @navigate="props.onNavigate"
     />
   </div>
 </template>

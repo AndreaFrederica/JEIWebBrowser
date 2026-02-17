@@ -10,6 +10,7 @@ export type WebviewTag = HTMLElement & {
   goBack: () => void
   goForward: () => void
   setAttribute: (name: string, value: string) => void
+  getWebContentsId: () => number
 }
 
 export interface TabItem {
