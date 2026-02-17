@@ -971,3 +971,55 @@ ipcMain.handle('get-webview-preload-path', async () => {
 ipcMain.handle('get-connection-certificate', async (_event, targetUrl: string) => {
   return fetchConnectionCertificate(targetUrl)
 })
+
+// WebView persistent storage API
+// Store key-value pairs with the origin as the namespace
+const webviewStore = new Store<any>({ name: 'webview-storage' })
+
+// Get storage key for a specific origin
+function getStorageKey(origin: string, key: string): string {
+  return `storage:${origin}:${key}`
+}
+
+// Get all keys for a specific origin
+function getOriginKeys(origin: string): string[] {
+  const allKeys = Object.keys((webviewStore.store as Record<string, unknown>) || {})
+  const prefix = `storage:${origin}:`
+  return allKeys.filter((k) => k.startsWith(prefix)).map((k) => k.substring(prefix.length))
+}
+
+ipcMain.handle('webview-storage-get', async (_event, origin: string, key: string) => {
+  const storageKey = getStorageKey(origin, key)
+  return webviewStore.get(storageKey, null)
+})
+
+ipcMain.handle('webview-storage-set', async (_event, origin: string, key: string, value: unknown) => {
+  const storageKey = getStorageKey(origin, key)
+  webviewStore.set(storageKey, value)
+  return true
+})
+
+ipcMain.handle('webview-storage-remove', async (_event, origin: string, key: string) => {
+  const storageKey = getStorageKey(origin, key)
+  webviewStore.delete(storageKey)
+  return true
+})
+
+ipcMain.handle('webview-storage-clear', async (_event, origin: string) => {
+  const allKeys = Object.keys((webviewStore.store as Record<string, unknown>) || {})
+  const prefix = `storage:${origin}:`
+  for (const key of allKeys) {
+    if (key.startsWith(prefix)) {
+      webviewStore.delete(key)
+    }
+  }
+  return true
+})
+
+ipcMain.handle('webview-storage-keys', async (_event, origin: string) => {
+  return getOriginKeys(origin)
+})
+
+ipcMain.handle('webview-storage-getLength', async (_event, origin: string) => {
+  return getOriginKeys(origin).length
+})
