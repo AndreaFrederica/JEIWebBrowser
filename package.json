@@ -1,0 +1,48 @@
+{
+  "name": "JEIWebBrowser",
+  "version": "1.0.0",
+  "main": "./out/main/index.js",
+  "type": "module",
+  "author": "AndreaFrederica",
+  "license": "MPL-2.0",
+  "scripts": {
+    "start": "electron-vite preview",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.11.1",
+    "@electron-forge/maker-deb": "^7.11.1",
+    "@electron-forge/maker-rpm": "^7.11.1",
+    "@electron-forge/maker-squirrel": "^7.11.1",
+    "@electron-forge/maker-zip": "^7.11.1",
+    "@electron-forge/plugin-webpack": "^7.11.1",
+    "@electron-toolkit/tsconfig": "^2.0.0",
+    "@electron-toolkit/utils": "^4.0.0",
+    "@types/electron-store": "^3.2.2",
+    "@types/node": "^25.2.3",
+    "@vercel/webpack-asset-relocator-loader": "^1.10.0",
+    "@vitejs/plugin-vue": "^6.0.4",
+    "css-loader": "^7.1.4",
+    "electron": "^40.4.1",
+    "electron-forge": "^5.2.4",
+    "electron-vite": "^5.0.0",
+    "fork-ts-checker-webpack-plugin": "^9.1.0",
+    "html-webpack-plugin": "^5.6.6",
+    "style-loader": "^4.0.0",
+    "ts-loader": "^9.5.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "vite-plugin-checker": "^0.11.0",
+    "webpack": "^5.105.2",
+    "webpack-cli": "^6.0.1"
+  },
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.2",
+    "electron-context-menu": "^4.1.1",
+    "electron-store": "^11.0.2",
+    "lucide-vue-next": "^0.574.0",
+    "vue": "^3.5.28"
+  }
+}
