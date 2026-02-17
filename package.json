@@ -4,7 +4,10 @@
   "version": "1.0.0",
   "main": "./out/main/index.js",
   "type": "module",
-  "author": "AndreaFrederica",
+  "author": {
+    "name": "AndreaFrederica",
+    "email": "andreafrederica@outlook.com"
+  },
   "license": "MPL-2.0",
   "scripts": {
     "start": "electron-vite preview",
