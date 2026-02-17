@@ -32,20 +32,6 @@ jobs:
         with:
           node-version: '23'
 
-      - name: Get commit message
-        id: commit_info
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ -n "${{ github.event.inputs.commit_message }}" ]; then
-              echo "message=${{ github.event.inputs.commit_message }}" >> $GITHUB_OUTPUT
-            else
-              echo "message=Manual build" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "message=${{ github.event.head_commit.message }}" >> $GITHUB_OUTPUT
-          fi
-        shell: bash
-
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
@@ -98,16 +84,36 @@ jobs:
             release/*.zip
           retention-days: 30
 
-      - name: Create Release (only on push to main/master)
-        if: matrix.os == 'windows-latest' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get commit info
+        id: commit_info
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "message=${{ github.event.head_commit.message }}" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ github.run_number }}
-          name: Release v${{ github.run_number }}
+          tag_name: v${{ steps.commit_info.outputs.sha_short }}
+          name: Release v${{ steps.commit_info.outputs.sha_short }}
           body: |
             ## ${{ steps.commit_info.outputs.message }}
 
-            **Build:** ${{ github.run_number }}
+            **Version:** v${{ steps.commit_info.outputs.sha_short }}
             **Commit:** ${{ github.sha }}
             **Branch:** ${{ github.ref_name }}
 
@@ -116,10 +122,9 @@ jobs:
             - macOS: `.dmg` image
             - Linux: `.AppImage` / `.deb`
           files: |
-            release/*.exe
-            release/*.dmg
-            release/*.AppImage
-            release/*.deb
+            artifacts/JEI-Browser-Windows/*
+            artifacts/JEI-Browser-macOS/*
+            artifacts/JEI-Browser-Linux/*
           draft: false
           prerelease: false
         env:
