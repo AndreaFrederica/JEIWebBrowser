@@ -1,14 +1,13 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
+  getInternalTitle,
   INTERNAL_BOOKMARKS,
   INTERNAL_HISTORY,
   INTERNAL_HOME,
   INTERNAL_SETTINGS,
-  internalBookmarksUrl,
-  internalHistoryUrl,
-  internalHomeUrl,
-  internalSettingsUrl
+  isInternalUrl
 } from '../pages/internal-home'
+import { normalizeInputToUrl, normalizeSearchEngine, type SearchEngineKey } from '../utils/search'
 import type { BookmarkItem, HistoryItem, SettingsPayload, TabItem, WebviewTag } from '../types/browser'
 
 const ipcRenderer =
@@ -32,6 +31,10 @@ export function useBrowserState() {
   const settingShortcut = ref('')
   const homePage = ref(INTERNAL_HOME)
   const settingHomepage = ref(INTERNAL_HOME)
+  const showBookmarksBar = ref(true)
+  const tabBarLayout = ref<'horizontal' | 'vertical'>('horizontal')
+  const searchEngine = ref<SearchEngineKey>('bing')
+  const verticalTabsCollapsed = ref(false)
   const webviewPreloadPath = ref<string | null>(null)
   let tabCounter = 0
 
@@ -42,12 +45,14 @@ export function useBrowserState() {
     if (value === INTERNAL_HOME || value === INTERNAL_BOOKMARKS || value === INTERNAL_HISTORY || value === INTERNAL_SETTINGS) {
       return value
     }
-
-    if (!value.startsWith('http://') && !value.startsWith('https://')) {
-      return ''
-    }
-
+    if (!value.startsWith('http://') && !value.startsWith('https://')) return ''
     return value
+  })
+
+  const activeInternalUrl = computed(() => {
+    const tab = getActiveTab()
+    if (!tab || !isInternalUrl(tab.src)) return null
+    return tab.src
   })
 
   const isBookmarked = computed(() => {
@@ -55,15 +60,28 @@ export function useBrowserState() {
     return bookmarks.value.some((item) => (item.url || '').trim() === activePageUrl.value)
   })
 
+  function applySettings(settings: SettingsPayload): void {
+    alwaysOnTop.value = settings.alwaysOnTop
+    settingShortcut.value = settings.shortcut
+    settingHomepage.value = settings.homePage || INTERNAL_HOME
+    homePage.value = settings.homePage || INTERNAL_HOME
+    showBookmarksBar.value = settings.showBookmarksBar
+    tabBarLayout.value = settings.tabBarLayout === 'vertical' ? 'vertical' : 'horizontal'
+    searchEngine.value = normalizeSearchEngine(settings.searchEngine)
+    verticalTabsCollapsed.value = !!settings.verticalTabsCollapsed
+  }
+
   function normalizeUrl(raw: string): string {
     const value = (raw ?? '').trim()
-    if (!value) return internalHomeUrl()
-    if (value === INTERNAL_HOME || value.toLowerCase() === 'internal') return internalHomeUrl()
-    if (value === INTERNAL_BOOKMARKS) return internalBookmarksUrl()
-    if (value === INTERNAL_HISTORY) return internalHistoryUrl()
-    if (value === INTERNAL_SETTINGS) return internalSettingsUrl()
-    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)) return value
-    return `https://${value}`
+    if (!value) return INTERNAL_HOME
+    if (value.toLowerCase() === 'internal' || value === INTERNAL_HOME) return INTERNAL_HOME
+    if (value === INTERNAL_BOOKMARKS || value === INTERNAL_HISTORY || value === INTERNAL_SETTINGS) return value
+    return normalizeInputToUrl(value, searchEngine.value)
+  }
+
+  function getActiveTab(): TabItem | null {
+    if (!activeTabId.value) return null
+    return tabs.value.find((item) => item.id === activeTabId.value) ?? null
   }
 
   function setWebviewRef(tabId: string, element: Element | null): void {
@@ -73,7 +91,6 @@ export function useBrowserState() {
     }
 
     const webview = element as WebviewTag
-
     webviews.set(tabId, webview)
     bindWebviewEvents(tabId, webview)
   }
@@ -91,33 +108,35 @@ export function useBrowserState() {
     tab.title = title || webview.getTitle() || 'Loading...'
   }
 
+  function updateTabFavicon(tabId: string, favicon: string | null): void {
+    const tab = tabs.value.find((item) => item.id === tabId)
+    if (!tab) return
+    tab.favicon = favicon
+  }
+
   function updateAddressBar(): void {
+    const tab = getActiveTab()
+    if (!tab) {
+      addressBar.value = ''
+      return
+    }
+
+    if (isInternalUrl(tab.src)) {
+      addressBar.value = tab.src
+      return
+    }
+
     const webview = getActiveWebview()
-    if (!webview) return
+    if (!webview) {
+      addressBar.value = tab.src
+      return
+    }
 
     try {
       const url = webview.getURL()
-      if (url.startsWith('data:text/html')) {
-        if (url.includes('#jei-bookmarks')) {
-          addressBar.value = INTERNAL_BOOKMARKS
-          return
-        }
-        if (url.includes('#jei-history')) {
-          addressBar.value = INTERNAL_HISTORY
-          return
-        }
-        if (url.includes('#jei-settings')) {
-          addressBar.value = INTERNAL_SETTINGS
-          return
-        }
-
-        addressBar.value = INTERNAL_HOME
-        return
-      }
-
-      addressBar.value = url
+      addressBar.value = url || tab.src
     } catch {
-      addressBar.value = ''
+      addressBar.value = tab.src
     }
   }
 
@@ -128,7 +147,13 @@ export function useBrowserState() {
 
   function createNewTab(url?: string): void {
     const tabId = `tab-${tabCounter++}`
-    tabs.value.push({ id: tabId, title: 'New Tab', src: normalizeUrl(url || homePage.value) })
+    const target = normalizeUrl(url || homePage.value)
+    tabs.value.push({
+      id: tabId,
+      title: isInternalUrl(target) ? getInternalTitle(target) : 'New Tab',
+      src: target,
+      favicon: null
+    })
     switchTab(tabId)
   }
 
@@ -151,9 +176,23 @@ export function useBrowserState() {
   }
 
   function navigateTo(url: string): void {
+    const tab = getActiveTab()
+    if (!tab) return
+
+    const target = normalizeUrl(url)
+    const fromInternal = isInternalUrl(tab.src)
+    const toInternal = isInternalUrl(target)
     const webview = getActiveWebview()
-    if (!webview) return
-    webview.loadURL(normalizeUrl(url))
+
+    if (!fromInternal && !toInternal && webview) {
+      webview.loadURL(target)
+      return
+    }
+
+    tab.src = target
+    tab.title = toInternal ? getInternalTitle(target) : 'Loading...'
+    tab.favicon = null
+    addressBar.value = target
   }
 
   function bindWebviewEvents(tabId: string, webview: WebviewTag): void {
@@ -173,6 +212,12 @@ export function useBrowserState() {
       updateTabTitle(tabId, payload.title)
     })
 
+    webview.addEventListener('page-favicon-updated', (event: Event) => {
+      const payload = event as Event & { favicons?: string[] }
+      const nextIcon = Array.isArray(payload.favicons) && payload.favicons.length > 0 ? payload.favicons[0] : null
+      updateTabFavicon(tabId, nextIcon)
+    })
+
     webview.addEventListener('did-navigate', () => {
       if (activeTabId.value === tabId) updateAddressBar()
     })
@@ -181,23 +226,34 @@ export function useBrowserState() {
       if (activeTabId.value === tabId) updateAddressBar()
     })
 
+    webview.addEventListener('did-start-loading', () => {
+      updateTabFavicon(tabId, null)
+    })
+
     webview.addEventListener('new-window', (event: Event) => {
       const payload = event as Event & { url?: string }
       if (payload.url) createNewTab(payload.url)
     })
   }
 
-  function loadBookmarks(): void {
-    ipcRenderer.send('get-bookmarks')
+  async function loadBookmarks(): Promise<void> {
+    try {
+      const items = await ipcRenderer.invoke('get-bookmarks-data')
+      bookmarks.value = Array.isArray(items) ? items : []
+    } catch {
+      bookmarks.value = []
+    }
   }
 
   function saveBookmark(): void {
+    const tab = getActiveTab()
+    if (!tab || isInternalUrl(tab.src)) return
+
     const webview = getActiveWebview()
     if (!webview) return
 
-    const rawUrl = webview.getURL()
-    const bookmarkUrl = rawUrl.startsWith('data:text/html') ? addressBar.value : rawUrl
-    if (!bookmarkUrl || isBookmarked.value) return
+    const bookmarkUrl = webview.getURL()
+    if (!bookmarkUrl || isBookmarked.value || isInternalUrl(bookmarkUrl)) return
 
     ipcRenderer.send('save-bookmark', {
       title: webview.getTitle(),
@@ -209,13 +265,56 @@ export function useBrowserState() {
     ipcRenderer.send('remove-bookmark', url)
   }
 
+  async function loadHistory(): Promise<void> {
+    try {
+      const items = await ipcRenderer.invoke('get-history-data')
+      historyItems.value = Array.isArray(items) ? items : []
+    } catch {
+      historyItems.value = []
+    }
+  }
+
+  async function clearHistory(): Promise<boolean> {
+    try {
+      const result = await ipcRenderer.invoke('clear-history-data')
+      const ok = !!result?.success
+      if (ok) historyItems.value = []
+      return ok
+    } catch {
+      return false
+    }
+  }
+
+  function applySettingsFromInternalPage(settings: SettingsPayload): void {
+    applySettings(settings)
+  }
+
+  function toggleVerticalTabsCollapsed(): void {
+    verticalTabsCollapsed.value = !verticalTabsCollapsed.value
+    const payload: SettingsPayload = {
+      shortcut: settingShortcut.value,
+      alwaysOnTop: alwaysOnTop.value,
+      homePage: homePage.value,
+      showBookmarksBar: showBookmarksBar.value,
+      tabBarLayout: tabBarLayout.value,
+      searchEngine: searchEngine.value,
+      verticalTabsCollapsed: verticalTabsCollapsed.value
+    }
+    void ipcRenderer.invoke('save-settings-data', payload)
+  }
+
   function saveSettings(): void {
     const nextHome = settingHomepage.value.trim() ? settingHomepage.value.trim() : INTERNAL_HOME
     homePage.value = nextHome
 
     ipcRenderer.send('save-settings', {
       shortcut: settingShortcut.value,
-      homePage: nextHome
+      homePage: nextHome,
+      alwaysOnTop: alwaysOnTop.value,
+      showBookmarksBar: showBookmarksBar.value,
+      tabBarLayout: tabBarLayout.value,
+      searchEngine: searchEngine.value,
+      verticalTabsCollapsed: verticalTabsCollapsed.value
     })
   }
 
@@ -278,6 +377,7 @@ export function useBrowserState() {
   }
 
   function openHistory(): void {
+    void loadHistory()
     createNewTab(INTERNAL_HISTORY)
   }
 
@@ -301,16 +401,6 @@ export function useBrowserState() {
   }
 
   onMounted(async () => {
-    try {
-      const preloadPath = await ipcRenderer.invoke('get-webview-preload-path')
-      webviewPreloadPath.value = typeof preloadPath === 'string' && preloadPath.length > 0 ? preloadPath : null
-    } catch {
-      webviewPreloadPath.value = null
-    }
-
-    ipcRenderer.send('get-settings')
-    loadBookmarks()
-
     ipcRenderer.on('bookmarks-data', (items: BookmarkItem[]) => {
       bookmarks.value = items
     })
@@ -320,13 +410,7 @@ export function useBrowserState() {
     })
 
     ipcRenderer.on('settings-data', (settings: SettingsPayload) => {
-      alwaysOnTop.value = settings.alwaysOnTop
-      settingShortcut.value = settings.shortcut
-
-      const nextHome = settings.homePage ? settings.homePage : INTERNAL_HOME
-      settingHomepage.value = nextHome
-      homePage.value = nextHome
-
+      applySettings(settings)
       if (tabs.value.length === 0) {
         createNewTab(homePage.value)
       }
@@ -354,6 +438,26 @@ export function useBrowserState() {
     ipcRenderer.on('nav-reload', reloadPage)
     ipcRenderer.on('nav-home', goHome)
     ipcRenderer.on('nav-new-tab', () => createNewTab(homePage.value))
+
+    try {
+      const preloadPath = await ipcRenderer.invoke('get-webview-preload-path')
+      webviewPreloadPath.value = typeof preloadPath === 'string' && preloadPath.length > 0 ? preloadPath : null
+    } catch {
+      webviewPreloadPath.value = null
+    }
+
+    try {
+      const settings = (await ipcRenderer.invoke('get-settings-data')) as SettingsPayload | null
+      if (settings) applySettings(settings)
+    } catch {
+      // Keep defaults.
+    }
+
+    await loadBookmarks()
+
+    if (tabs.value.length === 0) {
+      createNewTab(homePage.value)
+    }
   })
 
   return {
@@ -361,6 +465,7 @@ export function useBrowserState() {
     bookmarks,
     historyItems,
     activeTabId,
+    activeInternalUrl,
     addressBar,
     alwaysOnTop,
     showHistoryModal,
@@ -369,6 +474,10 @@ export function useBrowserState() {
     settingShortcut,
     homePage,
     settingHomepage,
+    showBookmarksBar,
+    tabBarLayout,
+    searchEngine,
+    verticalTabsCollapsed,
     webviewPreloadPath,
     isBookmarked,
     setWebviewRef,
@@ -385,11 +494,16 @@ export function useBrowserState() {
     reloadPage,
     saveBookmark,
     removeBookmark,
+    loadBookmarks,
+    loadHistory,
+    clearHistory,
+    applySettingsFromInternalPage,
     openBookmarksManage,
     openHistory,
     openSettings,
     onAddressEnter,
     applyAlwaysOnTop,
+    toggleVerticalTabsCollapsed,
     openBookmark,
     openBookmarkInNewTab,
     copyBookmarkLink,

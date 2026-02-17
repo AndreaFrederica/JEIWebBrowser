@@ -19,6 +19,15 @@ interface Settings {
   shortcut: string
   alwaysOnTop: boolean
   homePage: string
+  showBookmarksBar: boolean
+  tabBarLayout: 'horizontal' | 'vertical'
+  searchEngine: 'google' | 'bing' | 'duckduckgo' | 'baidu'
+  verticalTabsCollapsed: boolean
+}
+
+function normalizeSearchEngine(value: unknown): Settings['searchEngine'] {
+  if (value === 'google' || value === 'duckduckgo' || value === 'baidu') return value
+  return 'bing'
 }
 
 // Define the store schema for better typing if possible, but for now simple usage
@@ -86,10 +95,18 @@ const isDev = Boolean(process.env['ELECTRON_RENDERER_URL'])
 
 // Get settings with defaults
 function getSettings(): Settings {
+  const tabBarLayout = store.get('tabBarLayout', 'horizontal')
+  const normalizedLayout = tabBarLayout === 'vertical' ? 'vertical' : 'horizontal'
+  const searchEngine = normalizeSearchEngine(store.get('searchEngine', 'bing'))
+
   return {
     shortcut: store.get('shortcut', 'CommandOrControl+F8') as string,
     alwaysOnTop: store.get('alwaysOnTop', true) as boolean,
-    homePage: store.get('homePage', INTERNAL_HOME) as string
+    homePage: store.get('homePage', INTERNAL_HOME) as string,
+    showBookmarksBar: store.get('showBookmarksBar', true) as boolean,
+    tabBarLayout: normalizedLayout,
+    searchEngine,
+    verticalTabsCollapsed: store.get('verticalTabsCollapsed', false) as boolean
   }
 }
 
@@ -588,26 +605,69 @@ ipcMain.handle('get-settings-data', async () => {
 })
 
 ipcMain.on('save-settings', (event, newSettings: Settings) => {
-  safeStoreSet('shortcut', newSettings.shortcut)
-  safeStoreSet('homePage', newSettings.homePage)
+  const current = getSettings()
+  const nextShortcut = typeof newSettings?.shortcut === 'string' ? newSettings.shortcut : current.shortcut
+  const nextHomePage = typeof newSettings?.homePage === 'string' ? newSettings.homePage : current.homePage
+  const nextShowBookmarksBar =
+    typeof newSettings?.showBookmarksBar === 'boolean' ? newSettings.showBookmarksBar : current.showBookmarksBar
+  const nextSearchEngine = normalizeSearchEngine(newSettings?.searchEngine)
+  const nextVerticalTabsCollapsed =
+    typeof newSettings?.verticalTabsCollapsed === 'boolean'
+      ? newSettings.verticalTabsCollapsed
+      : current.verticalTabsCollapsed
+  const nextTabBarLayout =
+    newSettings?.tabBarLayout === 'vertical'
+      ? 'vertical'
+      : newSettings?.tabBarLayout === 'horizontal'
+        ? 'horizontal'
+        : current.tabBarLayout
+
+  safeStoreSet('shortcut', nextShortcut)
+  safeStoreSet('homePage', nextHomePage)
+  safeStoreSet('showBookmarksBar', nextShowBookmarksBar)
+  safeStoreSet('searchEngine', nextSearchEngine)
+  safeStoreSet('tabBarLayout', nextTabBarLayout)
+  safeStoreSet('verticalTabsCollapsed', nextVerticalTabsCollapsed)
   // alwaysOnTop is handled separately by toggle-always-on-top usually, but we can sync here too
 
   // Re-register shortcut
-  const success = registerGlobalShortcut(newSettings.shortcut)
+  const success = registerGlobalShortcut(nextShortcut)
   event.reply('save-settings-reply', { success })
 })
 
 ipcMain.handle('save-settings-data', async (_event, newSettings: Settings) => {
-  safeStoreSet('shortcut', newSettings.shortcut)
-  safeStoreSet('homePage', newSettings.homePage)
-  safeStoreSet('alwaysOnTop', newSettings.alwaysOnTop)
+  const current = getSettings()
+  const nextShortcut = typeof newSettings?.shortcut === 'string' ? newSettings.shortcut : current.shortcut
+  const nextHomePage = typeof newSettings?.homePage === 'string' ? newSettings.homePage : current.homePage
+  const nextAlwaysOnTop = typeof newSettings?.alwaysOnTop === 'boolean' ? newSettings.alwaysOnTop : current.alwaysOnTop
+  const nextTabBarLayout =
+    newSettings?.tabBarLayout === 'vertical'
+      ? 'vertical'
+      : newSettings?.tabBarLayout === 'horizontal'
+        ? 'horizontal'
+        : current.tabBarLayout
+  const nextShowBookmarksBar =
+    typeof newSettings?.showBookmarksBar === 'boolean' ? newSettings.showBookmarksBar : current.showBookmarksBar
+  const nextSearchEngine = normalizeSearchEngine(newSettings?.searchEngine)
+  const nextVerticalTabsCollapsed =
+    typeof newSettings?.verticalTabsCollapsed === 'boolean'
+      ? newSettings.verticalTabsCollapsed
+      : current.verticalTabsCollapsed
+
+  safeStoreSet('shortcut', nextShortcut)
+  safeStoreSet('homePage', nextHomePage)
+  safeStoreSet('alwaysOnTop', nextAlwaysOnTop)
+  safeStoreSet('showBookmarksBar', nextShowBookmarksBar)
+  safeStoreSet('searchEngine', nextSearchEngine)
+  safeStoreSet('tabBarLayout', nextTabBarLayout)
+  safeStoreSet('verticalTabsCollapsed', nextVerticalTabsCollapsed)
 
   if (mainWindow) {
-    const level = newSettings.alwaysOnTop ? 'screen-saver' : 'normal'
-    mainWindow.setAlwaysOnTop(newSettings.alwaysOnTop, level)
+    const level = nextAlwaysOnTop ? 'screen-saver' : 'normal'
+    mainWindow.setAlwaysOnTop(nextAlwaysOnTop, level)
   }
 
-  const success = registerGlobalShortcut(newSettings.shortcut)
+  const success = registerGlobalShortcut(nextShortcut)
   return { success }
 })
 

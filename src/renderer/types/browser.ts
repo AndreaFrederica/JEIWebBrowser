@@ -15,6 +15,7 @@ export interface TabItem {
   id: string
   title: string
   src: string
+  favicon: string | null
 }
 
 export interface BookmarkItem {
@@ -32,4 +33,8 @@ export interface SettingsPayload {
   shortcut: string
   alwaysOnTop: boolean
   homePage: string
+  showBookmarksBar: boolean
+  tabBarLayout: 'horizontal' | 'vertical'
+  searchEngine: 'google' | 'bing' | 'duckduckgo' | 'baidu'
+  verticalTabsCollapsed: boolean
 }

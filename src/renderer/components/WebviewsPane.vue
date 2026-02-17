@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import { isInternalUrl } from '../pages/internal-home'
 import type { TabItem } from '../types/browser'
 
-defineProps<{
+const props = defineProps<{
   tabs: TabItem[]
   activeTabId: string | null
   preloadPath: string | null
@@ -10,18 +12,20 @@ defineProps<{
 const emit = defineEmits<{
   webviewRef: [tabId: string, element: Element | null]
 }>()
+
+const externalTabs = computed(() => props.tabs.filter((tab) => !isInternalUrl(tab.src)))
 </script>
 
 <template>
   <div id="webviews-container">
     <webview
-      v-for="tab in tabs"
+      v-for="tab in externalTabs"
       :id="`webview-${tab.id}`"
       :key="`webview-${tab.id}`"
-      :preload="preloadPath || undefined"
+      :preload="props.preloadPath || undefined"
       :src="tab.src"
       allowpopups
-      :class="{ active: activeTabId === tab.id }"
+      :class="{ active: props.activeTabId === tab.id }"
       :ref="(el) => emit('webviewRef', tab.id, el as Element | null)"
     />
   </div>
@@ -29,8 +33,8 @@ const emit = defineEmits<{
 
 <style scoped>
 #webviews-container {
-  flex-grow: 1;
-  position: relative;
+  position: absolute;
+  inset: 0;
   background-color: white;
 }
 
