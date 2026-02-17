@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { HOME_LINKS, type HomeLink } from '../pages/internal-home'
 import { normalizeInputToUrl, type SearchEngineKey } from '../utils/search'
 
@@ -37,6 +37,8 @@ const mirrors = computed(() => cards.value.filter((item) => item.group === 'mirr
 const friends = computed(() => cards.value.filter((item) => item.group === 'friends'))
 const sources = computed(() => cards.value.filter((item) => item.group === 'sources'))
 const tools = computed(() => cards.value.filter((item) => item.group === 'tools'))
+const META_TIMEOUT_MS = 4500
+let hydrateToken = 0
 
 function hostOf(value: string): string {
   try {
@@ -68,24 +70,39 @@ function open(url: string): void {
 }
 
 async function hydrateCards(): Promise<void> {
+  const currentToken = ++hydrateToken
   for (const card of cards.value) {
-    try {
-      const meta = await ipcRenderer.invoke('fetch-site-meta', card.url)
-      if (!meta) continue
-      if (typeof meta.title === 'string' && meta.title.trim()) {
-        card.title = meta.title
+    void (async () => {
+      try {
+        const timeoutPromise = new Promise<null>((resolve) => {
+          setTimeout(() => resolve(null), META_TIMEOUT_MS)
+        })
+        const meta = (await Promise.race([
+          ipcRenderer.invoke('fetch-site-meta', card.url),
+          timeoutPromise
+        ])) as { title?: unknown; iconUrl?: unknown } | null
+
+        if (hydrateToken !== currentToken || !meta) return
+
+        if (typeof meta.title === 'string' && meta.title.trim()) {
+          card.title = meta.title
+        }
+        if (typeof meta.iconUrl === 'string' && meta.iconUrl.trim()) {
+          card.iconUrl = meta.iconUrl
+        }
+      } catch {
+        // Ignore single-card failures.
       }
-      if (typeof meta.iconUrl === 'string' && meta.iconUrl.trim()) {
-        card.iconUrl = meta.iconUrl
-      }
-    } catch {
-      // Ignore single-card failures.
-    }
+    })()
   }
 }
 
 onMounted(() => {
   void hydrateCards()
+})
+
+onBeforeUnmount(() => {
+  hydrateToken += 1
 })
 </script>
 
@@ -94,6 +111,9 @@ onMounted(() => {
     <h1>欢迎来到 JEI Web</h1>
     <div class="sub">
       <span class="pill">官方 QQ 群：<b>1080814651</b></span>
+      <button class="join-btn" @click="open('http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=Zp45eM6yAUVlPrg_lO03L3E_Ctul4mvo&authKey=1Cgzkg3Msjbrd8dmWVXi%2Fm2VaB9wU5XAsHc%2BQrHEthIO%2F9lL7AH5MrKvOhJXavDv&noverify=0&group_code=1080814651')">
+        点击加入QQ交流群
+      </button>
       <div class="note">有任何反馈和希望参与开发都可以加入，也支持明日方舟：终末地（以及任何我们支持的游戏和 Minecraft）的游戏讨论。</div>
     </div>
 
@@ -184,6 +204,10 @@ h1 {
   opacity: 0.82;
   margin: 0 0 22px;
   line-height: 1.6;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .note {
@@ -200,6 +224,23 @@ h1 {
   border-radius: 999px;
   border: 1px solid #2d2d2d;
   background: #252526;
+}
+
+.join-btn {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid #12b886;
+  background: #12b886;
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.join-btn:hover {
+  background: #0d9f73;
+  border-color: #0d9f73;
 }
 
 .search {

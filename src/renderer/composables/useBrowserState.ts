@@ -32,6 +32,7 @@ export function useBrowserState() {
   const historyItems = ref<HistoryItem[]>([])
   const activeTabId = ref<string | null>(null)
   const addressBar = ref('')
+  const internalPageReloadTick = ref(0)
   const alwaysOnTop = ref(false)
   const transparencyEnabled = ref(false)
   const windowOpacity = ref(0.85)
@@ -532,11 +533,23 @@ export function useBrowserState() {
   }
 
   function reloadPage(): void {
+    const tab = getActiveTab()
+    if (tab && isInternalUrl(tab.src)) {
+      internalPageReloadTick.value += 1
+      return
+    }
+
     const webview = getActiveWebview()
     if (webview) webview.reload()
   }
 
   function hardReloadPage(): void {
+    const tab = getActiveTab()
+    if (tab && isInternalUrl(tab.src)) {
+      internalPageReloadTick.value += 1
+      return
+    }
+
     const webview = getActiveWebview()
     if (webview) webview.reloadIgnoringCache()
   }
@@ -712,6 +725,7 @@ export function useBrowserState() {
     historyItems,
     activeTabId,
     activeInternalUrl,
+    internalPageReloadTick,
     addressBar,
     alwaysOnTop,
     transparencyEnabled,

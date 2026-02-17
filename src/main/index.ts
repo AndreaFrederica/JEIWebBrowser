@@ -185,7 +185,14 @@ const allowedMetaUrls = new Set<string>([
   'https://jei.arcwolf.top',
   'https://end.shallow.ink',
   'https://www.gamekee.com/zmd',
-  'https://wiki.skland.com/endfield'
+  'https://wiki.skland.com/endfield',
+  'https://github.com/Bakingss/factoriolab-zmd',
+  'https://github.com/AndreaFrederica/jei-web',
+  'https://github.com/AndreaFrederica/JEIWebBrowser',
+  'https://blog.sirrus.cc',
+  'https://wiki.sirrus.cc',
+  'https://anh.sirrus.cc',
+  'https://lunalauncher.sirrus.cc'
 ])
 
 const metaCache = new Map<string, { title?: string; iconUrl?: string }>()
@@ -539,14 +546,22 @@ async function fetchSiteMeta(url: string): Promise<{ title?: string; iconUrl?: s
   const cached = metaCache.get(url)
   if (cached) return cached
 
+  let timeout: ReturnType<typeof setTimeout> | null = null
   try {
+    const controller = new AbortController()
+    timeout = setTimeout(() => {
+      controller.abort()
+    }, 5000)
+
     const res = await fetch(url, {
       redirect: 'follow',
+      signal: controller.signal,
       headers: {
         'user-agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
       }
     })
+
     const finalUrl = res.url || url
     const html = await res.text()
 
@@ -579,6 +594,8 @@ async function fetchSiteMeta(url: string): Promise<{ title?: string; iconUrl?: s
     return result
   } catch {
     return null
+  } finally {
+    if (timeout) clearTimeout(timeout)
   }
 }
 

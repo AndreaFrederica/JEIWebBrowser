@@ -14,6 +14,7 @@ const {
   historyItems,
   activeTabId,
   activeInternalUrl,
+  internalPageReloadTick,
   addressBar,
   alwaysOnTop,
   transparencyEnabled,
@@ -143,6 +144,7 @@ const {
         />
 
         <InternalPagesPane
+          :key="`${activeInternalUrl ?? 'none'}:${internalPageReloadTick}`"
           :active-internal-url="activeInternalUrl"
           :search-engine="searchEngine"
           :bookmarks="bookmarks"
