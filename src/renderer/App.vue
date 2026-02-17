@@ -18,6 +18,7 @@ const {
   alwaysOnTop,
   showHistoryModal,
   showSettingsModal,
+  showCloseConfirmModal,
   settingsStatus,
   settingShortcut,
   homePage,
@@ -41,6 +42,9 @@ const {
   minimizeWindow,
   maximizeWindow,
   closeWindow,
+  cancelCloseConfirm,
+  closeAndHideWindow,
+  closeAndQuitApp,
   goHome,
   navigateBack,
   navigateForward,
@@ -154,6 +158,19 @@ const {
     @update:shortcut="(value) => (settingShortcut = value)"
     @update:homepage="(value) => (settingHomepage = value)"
   />
+
+  <div v-if="showCloseConfirmModal" id="close-confirm-mask" @click.self="cancelCloseConfirm">
+    <div id="close-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="close-confirm-title">
+      <div id="close-confirm-title">关闭 JEI 浏览器</div>
+      <p id="close-confirm-desc">请选择关闭方式</p>
+      <p id="close-confirm-hint">彻底退出会关闭整个程序；仅关闭窗口会继续在后台运行，可用全局快捷键重新打开。</p>
+      <div id="close-confirm-actions">
+        <button class="btn ghost" @click="cancelCloseConfirm">取消</button>
+        <button class="btn warn" @click="closeAndHideWindow">仅关闭窗口</button>
+        <button class="btn danger" @click="closeAndQuitApp">彻底退出</button>
+      </div>
+    </div>
+  </div>
 </template>
 
 <style scoped>
@@ -183,5 +200,95 @@ const {
   flex: 1;
   min-height: 0;
   position: relative;
+}
+
+#close-confirm-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(0, 0, 0, 0.46);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  box-sizing: border-box;
+}
+
+#close-confirm-dialog {
+  width: min(440px, 100%);
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: #252526;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
+  color: var(--fg-color);
+  padding: 20px;
+}
+
+#close-confirm-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #fff;
+}
+
+#close-confirm-desc {
+  margin: 8px 0 0;
+  color: var(--fg-color);
+  opacity: 0.9;
+  font-size: 13px;
+}
+
+#close-confirm-hint {
+  margin: 10px 0 0;
+  color: var(--fg-color);
+  opacity: 0.72;
+  line-height: 1.45;
+  font-size: 12px;
+}
+
+#close-confirm-actions {
+  margin-top: 16px;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.btn {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #252526;
+  color: var(--fg-color);
+}
+
+.btn:hover {
+  background: #2d2d2d;
+}
+
+.btn.ghost {
+  background: #252526;
+  color: var(--fg-color);
+}
+
+.btn.warn {
+  border-color: #0063a5;
+  background: #007acc;
+  color: #fff;
+}
+
+.btn.warn:hover {
+  background: #0063a5;
+}
+
+.btn.danger {
+  border-color: #5a2c2c;
+  background: #3a2323;
+  color: #ffb8b8;
+}
+
+.btn.danger:hover {
+  background: #4a2a2a;
 }
 </style>

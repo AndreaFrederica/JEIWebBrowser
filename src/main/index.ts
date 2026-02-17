@@ -5,7 +5,9 @@ import {
   globalShortcut,
   ipcMain,
   Menu,
+  nativeImage,
   screen,
+  Tray,
   type ContextMenuParams,
   type MenuItemConstructorOptions,
   type WebContents
@@ -52,6 +54,8 @@ const store = new Store<any>()
 const INTERNAL_HOME = 'jei://home'
 const WEBVIEW_HOME_PRELOAD_PATH = path.join(__dirname, '../preload/webview-home.mjs')
 const APP_ICON_PATH = path.join(__dirname, '../../icons/icon.png')
+const THUMBAR_QUIT_ICON_PATH = path.join(__dirname, '../../icons/favicon-16x16.png')
+const TRAY_ICON_PATH = path.join(__dirname, '../../icons/favicon-32x32.png')
 
 // Set app name
 app.setName('JEI 浏览器')
@@ -112,6 +116,8 @@ contextMenu({
 
 let mainWindow: BrowserWindow | null = null
 const auxWindows = new Set<BrowserWindow>()
+let tray: Tray | null = null
+let isAppQuitting = false
 const isDev = Boolean(process.env['ELECTRON_RENDERER_URL'])
 
 // Get settings with defaults
@@ -304,6 +310,108 @@ function ownerWindowFromWebContents(contents: WebContents): BrowserWindow | unde
   return BrowserWindow.fromWebContents(host ?? contents) ?? mainWindow ?? undefined
 }
 
+function senderWindow(contents: WebContents): BrowserWindow | undefined {
+  const host = (contents as WebContents & { hostWebContents?: WebContents }).hostWebContents
+  return BrowserWindow.fromWebContents(host ?? contents) ?? mainWindow ?? undefined
+}
+
+function isCtrlF5(input: { type?: string; key?: string; control?: boolean }): boolean {
+  return input.type === 'keyDown' && (input.key || '').toUpperCase() === 'F5' && !!input.control
+}
+
+function registerTaskbarThumbarButtons(win: BrowserWindow): void {
+  if (process.platform !== 'win32') return
+
+  const icon = nativeImage.createFromPath(THUMBAR_QUIT_ICON_PATH)
+  if (icon.isEmpty()) return
+
+  win.setThumbarButtons([
+    {
+      icon,
+      tooltip: '彻底退出 JEI 浏览器',
+      click: () => quitApplication()
+    }
+  ])
+}
+
+function showWindow(win: BrowserWindow): void {
+  win.show()
+  win.focus()
+}
+
+function hideWindow(win: BrowserWindow): void {
+  win.hide()
+}
+
+function toggleWindowVisible(win: BrowserWindow): void {
+  if (win.isVisible()) {
+    hideWindow(win)
+  } else {
+    showWindow(win)
+  }
+}
+
+function quitApplication(): void {
+  isAppQuitting = true
+  app.quit()
+}
+
+function installWindowCloseGuard(win: BrowserWindow): void {
+  win.on('close', (event) => {
+    if (isAppQuitting) return
+    if (win.webContents.isDestroyed()) return
+
+    const currentUrl = win.webContents.getURL()
+    if (!currentUrl || currentUrl === 'about:blank') return
+
+    event.preventDefault()
+    win.webContents.send('request-close-confirm')
+  })
+}
+
+function createTrayIcon(): void {
+  if (tray) return
+
+  const trayImage = nativeImage.createFromPath(TRAY_ICON_PATH)
+  if (trayImage.isEmpty()) return
+
+  tray = new Tray(trayImage.resize({ width: 16, height: 16 }))
+  tray.setToolTip('JEI 浏览器')
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: '显示窗口',
+        click: () => {
+          if (!mainWindow) {
+            createWindow()
+            return
+          }
+          showWindow(mainWindow)
+        }
+      },
+      {
+        label: '隐藏窗口',
+        click: () => {
+          if (mainWindow) hideWindow(mainWindow)
+        }
+      },
+      { type: 'separator' },
+      {
+        label: '彻底退出',
+        click: () => quitApplication()
+      }
+    ])
+  )
+
+  tray.on('click', () => {
+    if (!mainWindow) {
+      createWindow()
+      return
+    }
+    toggleWindowVisible(mainWindow)
+  })
+}
+
 function installWebviewContextMenu(contents: WebContents): void {
   contents.on('context-menu', (_event, params: ContextMenuParams) => {
     const ownerWindow = ownerWindowFromWebContents(contents)
@@ -434,12 +542,7 @@ function registerGlobalShortcut(shortcut: string): boolean {
   try {
     const ret = globalShortcut.register(shortcut, () => {
       if (mainWindow) {
-        if (mainWindow.isVisible()) {
-          mainWindow.hide()
-        } else {
-          mainWindow.show()
-          mainWindow.focus()
-        }
+        toggleWindowVisible(mainWindow)
       } else {
         createWindow()
       }
@@ -476,11 +579,13 @@ function createWindow(): void {
     },
     show: false // Start hidden until ready
   })
+  installWindowCloseGuard(mainWindow)
 
   // Apply correct alwaysOnTop level if enabled
   if (settings.alwaysOnTop) {
     mainWindow.setAlwaysOnTop(true, 'screen-saver')
   }
+  registerTaskbarThumbarButtons(mainWindow)
 
   // Load the renderer
   if (isDev) {
@@ -534,8 +639,10 @@ function createAuxWindow(initialUrl?: string): void {
     },
     show: false
   })
+  installWindowCloseGuard(win)
 
   auxWindows.add(win)
+  registerTaskbarThumbarButtons(win)
 
   if (settings.alwaysOnTop) {
     win.setAlwaysOnTop(true, 'screen-saver')
@@ -568,14 +675,29 @@ if (!isDev) {
   } else {
     app.on('second-instance', () => {
       if (mainWindow) {
-        if (!mainWindow.isVisible()) mainWindow.show()
-        mainWindow.focus()
+        showWindow(mainWindow)
       }
     })
   }
 }
 
 app.on('web-contents-created', (_event, contents) => {
+  const contentsType = contents.getType()
+
+  if (contentsType === 'window' || contentsType === 'webview') {
+    contents.on('before-input-event', (event, input) => {
+      if (!isCtrlF5(input)) return
+
+      event.preventDefault()
+      if (contentsType === 'webview') {
+        contents.reloadIgnoringCache()
+        return
+      }
+
+      contents.send('nav-hard-reload')
+    })
+  }
+
   if (contents.getType() === 'window') {
     contents.on('will-attach-webview', (_event, webPreferences) => {
       // Force a stable preload for every webview before its first navigation.
@@ -610,6 +732,7 @@ app.on('web-contents-created', (_event, contents) => {
 
 app.whenReady().then(() => {
   createWindow()
+  createTrayIcon()
 
   const settings = getSettings()
   registerGlobalShortcut(settings.shortcut)
@@ -623,33 +746,46 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
-    app.quit()
+    quitApplication()
   }
+})
+
+app.on('before-quit', () => {
+  isAppQuitting = true
 })
 
 app.on('will-quit', () => {
   // Unregister all shortcuts.
   globalShortcut.unregisterAll()
+  tray?.destroy()
+  tray = null
 })
 
 // IPC handlers for window controls
-ipcMain.on('window-minimize', () => {
-  if (mainWindow) mainWindow.minimize()
+ipcMain.on('window-minimize', (event) => {
+  senderWindow(event.sender)?.minimize()
 })
 
-ipcMain.on('window-maximize', () => {
-  if (mainWindow) {
-    if (mainWindow.isMaximized()) {
-      mainWindow.unmaximize()
+ipcMain.on('window-maximize', (event) => {
+  const target = senderWindow(event.sender)
+  if (target) {
+    if (target.isMaximized()) {
+      target.unmaximize()
     } else {
-      mainWindow.maximize()
+      target.maximize()
     }
   }
 })
 
-ipcMain.on('window-close', () => {
-  // Instead of closing, hide the window to keep it running for quick toggle
-  if (mainWindow) mainWindow.hide()
+ipcMain.on('window-close', (event) => {
+  const target = senderWindow(event.sender)
+  if (target) {
+    hideWindow(target)
+  }
+})
+
+ipcMain.on('window-quit', () => {
+  quitApplication()
 })
 
 ipcMain.on('toggle-always-on-top', (_event, flag: boolean) => {

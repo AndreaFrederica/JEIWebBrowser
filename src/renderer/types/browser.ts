@@ -4,6 +4,7 @@ export type WebviewTag = HTMLElement & {
   getTitle: () => string
   loadURL: (url: string) => void
   reload: () => void
+  reloadIgnoringCache: () => void
   canGoBack: () => boolean
   canGoForward: () => boolean
   goBack: () => void

@@ -35,6 +35,7 @@ export function useBrowserState() {
   const alwaysOnTop = ref(false)
   const showHistoryModal = ref(false)
   const showSettingsModal = ref(false)
+  const showCloseConfirmModal = ref(false)
   const settingsStatus = ref('')
   const settingShortcut = ref('')
   const homePage = ref(INTERNAL_HOME)
@@ -465,6 +466,11 @@ export function useBrowserState() {
     if (webview) webview.reload()
   }
 
+  function hardReloadPage(): void {
+    const webview = getActiveWebview()
+    if (webview) webview.reloadIgnoringCache()
+  }
+
   function minimizeWindow(): void {
     ipcRenderer.send('window-minimize')
   }
@@ -474,7 +480,21 @@ export function useBrowserState() {
   }
 
   function closeWindow(): void {
+    showCloseConfirmModal.value = true
+  }
+
+  function cancelCloseConfirm(): void {
+    showCloseConfirmModal.value = false
+  }
+
+  function closeAndHideWindow(): void {
+    showCloseConfirmModal.value = false
     ipcRenderer.send('window-close')
+  }
+
+  function closeAndQuitApp(): void {
+    showCloseConfirmModal.value = false
+    ipcRenderer.send('window-quit')
   }
 
   function goHome(): void {
@@ -565,9 +585,14 @@ export function useBrowserState() {
       if (url) createNewTab(url)
     })
 
+    ipcRenderer.on('request-close-confirm', () => {
+      showCloseConfirmModal.value = true
+    })
+
     ipcRenderer.on('nav-back', navigateBack)
     ipcRenderer.on('nav-forward', navigateForward)
     ipcRenderer.on('nav-reload', reloadPage)
+    ipcRenderer.on('nav-hard-reload', hardReloadPage)
     ipcRenderer.on('nav-home', goHome)
     ipcRenderer.on('nav-new-tab', () => createNewTab(homePage.value))
 
@@ -610,6 +635,7 @@ export function useBrowserState() {
     alwaysOnTop,
     showHistoryModal,
     showSettingsModal,
+    showCloseConfirmModal,
     settingsStatus,
     settingShortcut,
     homePage,
@@ -633,6 +659,9 @@ export function useBrowserState() {
     minimizeWindow,
     maximizeWindow,
     closeWindow,
+    cancelCloseConfirm,
+    closeAndHideWindow,
+    closeAndQuitApp,
     goHome,
     navigateBack,
     navigateForward,
