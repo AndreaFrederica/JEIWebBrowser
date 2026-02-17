@@ -57,8 +57,19 @@ const APP_ICON_PATH = path.join(__dirname, '../../icons/icon.png')
 const THUMBAR_QUIT_ICON_PATH = path.join(__dirname, '../../icons/favicon-16x16.png')
 const TRAY_ICON_PATH = path.join(__dirname, '../../icons/favicon-32x32.png')
 
+// Custom User-Agent suffix for JEI Browser
+// Note: Electron automatically adds "JEIBrowser/1.0.0" based on productName
+// This suffix adds project identification for web servers
+const JEI_BROWSER_UA = ' (JEIWebBrowser; https://github.com/AndreaFrederica/JEIWebBrowser)'
+
+// Get the full User-Agent by appending JEI identifier to Chromium's UA
+function getJEIUserAgent(): string {
+  const chromiumUA = app.userAgentFallback
+  return chromiumUA + JEI_BROWSER_UA
+}
+
 // Set app name
-app.setName('JEI 浏览器')
+app.setName('JEI Browser')
 
 // Initialize electron-context-menu
 contextMenu({
@@ -709,6 +720,17 @@ app.on('web-contents-created', (_event, contents) => {
   }
 
   if (contents.getType() === 'webview') {
+    // Set custom User-Agent for JEI Browser
+    contents.setUserAgent(getJEIUserAgent())
+
+    // Intercept new window requests and open in new tab instead
+    contents.setWindowOpenHandler(({ url }) => {
+      // Send request to renderer to open URL in new tab
+      const ownerWindow = ownerWindowFromWebContents(contents)
+      ownerWindow?.webContents.send('open-url-in-new-tab', url)
+      return { action: 'deny' } // Prevent default new window behavior
+    })
+
     installWebviewContextMenu(contents)
 
     const record = (url?: string) => {
