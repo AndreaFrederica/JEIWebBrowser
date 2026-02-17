@@ -14,6 +14,7 @@ import path from 'path'
 import Store from 'electron-store'
 import contextMenu from 'electron-context-menu'
 import { URL, pathToFileURL } from 'url'
+import * as tls from 'node:tls'
 
 interface Settings {
   shortcut: string
@@ -25,6 +26,22 @@ interface Settings {
   verticalTabsCollapsed: boolean
 }
 
+interface ConnectionCertificateInfo {
+  host: string
+  port: number
+  subject: string
+  issuer: string
+  validFrom: string
+  validTo: string
+  serialNumber: string
+  fingerprint256: string
+  subjectAltName: string
+  tlsProtocol: string
+  cipherName: string
+  authorized: boolean
+  authorizationError: string
+}
+
 function normalizeSearchEngine(value: unknown): Settings['searchEngine'] {
   if (value === 'google' || value === 'duckduckgo' || value === 'baidu') return value
   return 'bing'
@@ -34,6 +51,10 @@ function normalizeSearchEngine(value: unknown): Settings['searchEngine'] {
 const store = new Store<any>()
 const INTERNAL_HOME = 'jei://home'
 const WEBVIEW_HOME_PRELOAD_PATH = path.join(__dirname, '../preload/webview-home.mjs')
+const APP_ICON_PATH = path.join(__dirname, '../../icons/icon.png')
+
+// Set app name
+app.setName('JEI 浏览器')
 
 // Initialize electron-context-menu
 contextMenu({
@@ -135,6 +156,106 @@ const allowedMetaUrls = new Set<string>([
 ])
 
 const metaCache = new Map<string, { title?: string; iconUrl?: string }>()
+const certificateCache = new Map<string, { expiresAt: number; value: ConnectionCertificateInfo | null }>()
+
+function summarizeDn(dn: unknown): string {
+  if (!dn || typeof dn !== 'object') return ''
+  const source = dn as Record<string, unknown>
+  const parts: string[] = []
+  const push = (key: string, label: string) => {
+    const value = source[key]
+    if (typeof value === 'string' && value.trim()) {
+      parts.push(`${label}=${value.trim()}`)
+    }
+  }
+
+  push('CN', 'CN')
+  push('O', 'O')
+  push('OU', 'OU')
+  push('L', 'L')
+  push('ST', 'ST')
+  push('C', 'C')
+  return parts.join(', ')
+}
+
+async function fetchConnectionCertificate(targetUrl: string): Promise<ConnectionCertificateInfo | null> {
+  let parsed: URL
+  try {
+    parsed = new URL((targetUrl || '').trim())
+  } catch {
+    return null
+  }
+
+  if (parsed.protocol !== 'https:') return null
+
+  const host = parsed.hostname
+  const port = parsed.port ? Number(parsed.port) : 443
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) return null
+
+  const cacheKey = `${host}:${port}`
+  const cached = certificateCache.get(cacheKey)
+  const now = Date.now()
+  if (cached && cached.expiresAt > now) return cached.value
+
+  const result = await new Promise<ConnectionCertificateInfo | null>((resolve) => {
+    const socket = tls.connect({
+      host,
+      port,
+      servername: host,
+      rejectUnauthorized: false,
+      ALPNProtocols: ['h2', 'http/1.1']
+    })
+
+    let settled = false
+    const finish = (value: ConnectionCertificateInfo | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      if (!socket.destroyed) socket.destroy()
+      resolve(value)
+    }
+
+    const timeout = setTimeout(() => {
+      finish(null)
+    }, 6000)
+
+    socket.once('secureConnect', () => {
+      const cert = socket.getPeerCertificate(true) as tls.PeerCertificate | tls.DetailedPeerCertificate
+      if (!cert || Object.keys(cert).length === 0) {
+        finish(null)
+        return
+      }
+
+      finish({
+        host,
+        port,
+        subject: summarizeDn((cert as tls.DetailedPeerCertificate).subject),
+        issuer: summarizeDn((cert as tls.DetailedPeerCertificate).issuer),
+        validFrom: (cert as tls.DetailedPeerCertificate).valid_from || '',
+        validTo: (cert as tls.DetailedPeerCertificate).valid_to || '',
+        serialNumber: (cert as tls.DetailedPeerCertificate).serialNumber || '',
+        fingerprint256: (cert as tls.DetailedPeerCertificate).fingerprint256 || '',
+        subjectAltName: (cert as tls.DetailedPeerCertificate).subjectaltname || '',
+        tlsProtocol: socket.getProtocol() || '',
+        cipherName: socket.getCipher()?.name || '',
+        authorized: socket.authorized,
+        authorizationError:
+          typeof socket.authorizationError === 'string'
+            ? socket.authorizationError
+            : socket.authorizationError?.message || ''
+      })
+    })
+
+    socket.once('error', () => finish(null))
+    socket.once('close', () => finish(null))
+  })
+
+  certificateCache.set(cacheKey, {
+    expiresAt: now + (result ? 60_000 : 15_000),
+    value: result
+  })
+  return result
+}
 
 function normalizeHistoryUrl(rawUrl: string): string {
   const url = (rawUrl || '').trim()
@@ -342,6 +463,7 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: Math.floor(width * 0.8),
     height: Math.floor(height * 0.8),
+    icon: APP_ICON_PATH,
     frame: false, // Frameless for custom UI and better overlay
     transparent: false, // Set to true if you want transparency, but usually false for a browser
     alwaysOnTop: settings.alwaysOnTop, // Initial state from settings
@@ -399,6 +521,7 @@ function createAuxWindow(initialUrl?: string): void {
   const win = new BrowserWindow({
     width: Math.floor(width * 0.8),
     height: Math.floor(height * 0.8),
+    icon: APP_ICON_PATH,
     frame: false,
     transparent: false,
     alwaysOnTop: settings.alwaysOnTop,
@@ -685,4 +808,8 @@ ipcMain.handle('fetch-site-meta', async (_event, url: string) => {
 
 ipcMain.handle('get-webview-preload-path', async () => {
   return pathToFileURL(WEBVIEW_HOME_PRELOAD_PATH).toString()
+})
+
+ipcMain.handle('get-connection-certificate', async (_event, targetUrl: string) => {
+  return fetchConnectionCertificate(targetUrl)
 })

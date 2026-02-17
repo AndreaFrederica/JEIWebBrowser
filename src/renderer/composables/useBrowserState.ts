@@ -1,4 +1,4 @@
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
   getInternalTitle,
   INTERNAL_BOOKMARKS,
@@ -8,7 +8,15 @@ import {
   isInternalUrl
 } from '../pages/internal-home'
 import { normalizeInputToUrl, normalizeSearchEngine, type SearchEngineKey } from '../utils/search'
-import type { BookmarkItem, HistoryItem, SettingsPayload, TabItem, WebviewTag } from '../types/browser'
+import type {
+  BookmarkItem,
+  ConnectionCertificateInfo,
+  ConnectionSecurityState,
+  HistoryItem,
+  SettingsPayload,
+  TabItem,
+  WebviewTag
+} from '../types/browser'
 
 const ipcRenderer =
   window.ipc ??
@@ -36,6 +44,13 @@ export function useBrowserState() {
   const searchEngine = ref<SearchEngineKey>('bing')
   const verticalTabsCollapsed = ref(false)
   const webviewPreloadPath = ref<string | null>(null)
+  const tabLoadErrors = reactive(new Map<string, string>())
+  const connectionCertificate = ref<ConnectionCertificateInfo | null>(null)
+  const connectionCertificateLoading = ref(false)
+  const connectionCertificateError = ref('')
+  const certificateApiUnavailable = ref(false)
+  let certificateFetchToken = 0
+  let certificateFetchTimer: ReturnType<typeof setTimeout> | null = null
   let tabCounter = 0
 
   const webviews = reactive(new Map<string, WebviewTag>())
@@ -59,6 +74,109 @@ export function useBrowserState() {
     if (!activePageUrl.value) return false
     return bookmarks.value.some((item) => (item.url || '').trim() === activePageUrl.value)
   })
+
+  const connectionSecurity = computed<ConnectionSecurityState>(() => {
+    const tabError = activeTabId.value ? tabLoadErrors.get(activeTabId.value) || '' : ''
+    if (tabError && /(SSL|TLS|CERT)/i.test(tabError)) return 'broken'
+
+    const value = (addressBar.value || '').trim()
+    if (!value) return 'unknown'
+    if (isInternalUrl(value)) return 'internal'
+
+    try {
+      const parsed = new URL(value)
+      if (parsed.protocol === 'https:') return 'secure'
+      if (parsed.protocol === 'http:') {
+        const host = parsed.hostname.toLowerCase()
+        if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') return 'local'
+        return 'insecure'
+      }
+      return 'unknown'
+    } catch {
+      return 'unknown'
+    }
+  })
+
+  const connectionSecurityText = computed(() => {
+    if (connectionSecurity.value === 'secure') return '安全连接（HTTPS）'
+    if (connectionSecurity.value === 'insecure') return '不安全连接（HTTP）'
+    if (connectionSecurity.value === 'local') return '本地连接'
+    if (connectionSecurity.value === 'broken') return '证书或 TLS 连接异常'
+    if (connectionSecurity.value === 'internal') return 'JEI 内置页面'
+    return '连接状态未知'
+  })
+
+  async function refreshConnectionCertificate(): Promise<void> {
+    if (certificateApiUnavailable.value) {
+      connectionCertificate.value = null
+      connectionCertificateLoading.value = false
+      connectionCertificateError.value = '主进程未注册证书接口，请重启应用'
+      return
+    }
+
+    const address = (addressBar.value || '').trim()
+    if (!address || isInternalUrl(address)) {
+      connectionCertificate.value = null
+      connectionCertificateError.value = ''
+      connectionCertificateLoading.value = false
+      return
+    }
+
+    let parsed: URL
+    try {
+      parsed = new URL(address)
+    } catch {
+      connectionCertificate.value = null
+      connectionCertificateError.value = ''
+      connectionCertificateLoading.value = false
+      return
+    }
+
+    if (parsed.protocol !== 'https:') {
+      connectionCertificate.value = null
+      connectionCertificateError.value = ''
+      connectionCertificateLoading.value = false
+      return
+    }
+
+    const token = ++certificateFetchToken
+    connectionCertificateLoading.value = true
+    connectionCertificateError.value = ''
+
+    try {
+      const cert = (await ipcRenderer.invoke('get-connection-certificate', parsed.toString())) as ConnectionCertificateInfo | null
+      if (token !== certificateFetchToken) return
+      connectionCertificate.value = cert
+      if (!cert) {
+        connectionCertificateError.value = '无法读取远端证书信息'
+      }
+    } catch (error) {
+      if (token !== certificateFetchToken) return
+      connectionCertificate.value = null
+      const message = String(error ?? '')
+      if (message.includes("No handler registered for 'get-connection-certificate'")) {
+        certificateApiUnavailable.value = true
+        connectionCertificateError.value = '主进程未注册证书接口，请重启应用'
+      } else {
+        connectionCertificateError.value = '读取证书信息失败'
+      }
+    } finally {
+      if (token === certificateFetchToken) {
+        connectionCertificateLoading.value = false
+      }
+    }
+  }
+
+  function scheduleConnectionCertificateRefresh(): void {
+    if (certificateFetchTimer) {
+      clearTimeout(certificateFetchTimer)
+      certificateFetchTimer = null
+    }
+    certificateFetchTimer = setTimeout(() => {
+      certificateFetchTimer = null
+      void refreshConnectionCertificate()
+    }, 180)
+  }
 
   function applySettings(settings: SettingsPayload): void {
     alwaysOnTop.value = settings.alwaysOnTop
@@ -148,6 +266,7 @@ export function useBrowserState() {
   function createNewTab(url?: string): void {
     const tabId = `tab-${tabCounter++}`
     const target = normalizeUrl(url || homePage.value)
+    tabLoadErrors.delete(tabId)
     tabs.value.push({
       id: tabId,
       title: isInternalUrl(target) ? getInternalTitle(target) : 'New Tab',
@@ -163,6 +282,7 @@ export function useBrowserState() {
 
     tabs.value.splice(tabIndex, 1)
     webviews.delete(tabId)
+    tabLoadErrors.delete(tabId)
 
     if (activeTabId.value === tabId) {
       if (tabs.value.length === 0) {
@@ -183,6 +303,7 @@ export function useBrowserState() {
     const fromInternal = isInternalUrl(tab.src)
     const toInternal = isInternalUrl(target)
     const webview = getActiveWebview()
+    tabLoadErrors.delete(tab.id)
 
     if (!fromInternal && !toInternal && webview) {
       webview.loadURL(target)
@@ -201,6 +322,7 @@ export function useBrowserState() {
     webview.setAttribute('data-events-bound', '1')
 
     webview.addEventListener('dom-ready', () => {
+      tabLoadErrors.delete(tabId)
       if (activeTabId.value === tabId) {
         updateAddressBar()
         updateTabTitle(tabId)
@@ -219,15 +341,25 @@ export function useBrowserState() {
     })
 
     webview.addEventListener('did-navigate', () => {
+      tabLoadErrors.delete(tabId)
       if (activeTabId.value === tabId) updateAddressBar()
     })
 
     webview.addEventListener('did-navigate-in-page', () => {
+      tabLoadErrors.delete(tabId)
       if (activeTabId.value === tabId) updateAddressBar()
     })
 
     webview.addEventListener('did-start-loading', () => {
       updateTabFavicon(tabId, null)
+    })
+
+    webview.addEventListener('did-fail-load', (event: Event) => {
+      const payload = event as Event & { errorCode?: number; errorDescription?: string; isMainFrame?: boolean }
+      if (payload.isMainFrame === false) return
+      if (payload.errorCode === -3) return
+      const message = (payload.errorDescription || '').trim()
+      if (message) tabLoadErrors.set(tabId, message)
     })
 
     webview.addEventListener('new-window', (event: Event) => {
@@ -460,6 +592,14 @@ export function useBrowserState() {
     }
   })
 
+  watch(
+    () => addressBar.value,
+    () => {
+      scheduleConnectionCertificateRefresh()
+    },
+    { immediate: true }
+  )
+
   return {
     tabs,
     bookmarks,
@@ -477,6 +617,11 @@ export function useBrowserState() {
     showBookmarksBar,
     tabBarLayout,
     searchEngine,
+    connectionSecurity,
+    connectionSecurityText,
+    connectionCertificate,
+    connectionCertificateLoading,
+    connectionCertificateError,
     verticalTabsCollapsed,
     webviewPreloadPath,
     isBookmarked,

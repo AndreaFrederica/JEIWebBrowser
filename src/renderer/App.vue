@@ -25,6 +25,11 @@ const {
   showBookmarksBar,
   tabBarLayout,
   searchEngine,
+  connectionSecurity,
+  connectionSecurityText,
+  connectionCertificate,
+  connectionCertificateLoading,
+  connectionCertificateError,
   verticalTabsCollapsed,
   webviewPreloadPath,
   isBookmarked,
@@ -82,6 +87,11 @@ const {
         :address-bar="addressBar"
         :bookmarked="isBookmarked"
         :always-on-top="alwaysOnTop"
+        :connection-security="connectionSecurity"
+        :connection-security-text="connectionSecurityText"
+        :connection-certificate="connectionCertificate"
+        :connection-certificate-loading="connectionCertificateLoading"
+        :connection-certificate-error="connectionCertificateError"
         :show-window-controls="tabBarLayout === 'vertical'"
         @update:address-bar="(value) => (addressBar = value)"
         @home="goHome"

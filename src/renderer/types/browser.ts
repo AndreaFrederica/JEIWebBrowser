@@ -38,3 +38,21 @@ export interface SettingsPayload {
   searchEngine: 'google' | 'bing' | 'duckduckgo' | 'baidu'
   verticalTabsCollapsed: boolean
 }
+
+export type ConnectionSecurityState = 'internal' | 'secure' | 'insecure' | 'local' | 'broken' | 'unknown'
+
+export interface ConnectionCertificateInfo {
+  host: string
+  port: number
+  subject: string
+  issuer: string
+  validFrom: string
+  validTo: string
+  serialNumber: string
+  fingerprint256: string
+  subjectAltName: string
+  tlsProtocol: string
+  cipherName: string
+  authorized: boolean
+  authorizationError: string
+}
