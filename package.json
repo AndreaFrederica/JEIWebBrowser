@@ -9,7 +9,9 @@
   "scripts": {
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
-    "build": "electron-vite build"
+    "build": "electron-vite build",
+    "pack": "electron-vite build && electron-builder --dir",
+    "dist": "electron-vite build && electron-builder"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.1",
@@ -26,6 +28,7 @@
     "@vitejs/plugin-vue": "^6.0.4",
     "css-loader": "^7.1.4",
     "electron": "^40.4.1",
+    "electron-builder": "^26.7.0",
     "electron-forge": "^5.2.4",
     "electron-vite": "^5.0.0",
     "fork-ts-checker-webpack-plugin": "^9.1.0",
@@ -45,5 +48,47 @@
     "electron-store": "^11.0.2",
     "lucide-vue-next": "^0.574.0",
     "vue": "^3.5.28"
+  },
+  "build": {
+    "appId": "com.jei.webbrowser",
+    "productName": "JEI 浏览器",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icons/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": "icons/icon.png"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "icons/icon.png",
+      "category": "Network"
+    }
   }
 }

@@ -1,0 +1,30 @@
+appId: com.jei.webbrowser
+productName: JEI 浏览器
+directories:
+  output: release
+files:
+  - out/**/*
+  - package.json
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: icons/icon.png
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+mac:
+  target:
+    - dmg
+  icon: icons/icon.png
+linux:
+  target:
+    - AppImage
+    - deb
+  icon: icons/icon.png
+  category: Network
+electronDownload:
+  mirror: https://npmmirror.com/mirrors/electron/
