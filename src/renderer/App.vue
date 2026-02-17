@@ -16,6 +16,8 @@ const {
   activeInternalUrl,
   addressBar,
   alwaysOnTop,
+  transparencyEnabled,
+  windowOpacity,
   showHistoryModal,
   showSettingsModal,
   showCloseConfirmModal,
@@ -59,6 +61,8 @@ const {
   openSettings,
   onAddressEnter,
   applyAlwaysOnTop,
+  applyTransparencyEnabled,
+  applyWindowOpacity,
   toggleVerticalTabsCollapsed,
   openBookmark,
   openBookmarkInNewTab,
@@ -74,6 +78,8 @@ const {
       :tabs="tabs"
       :active-tab-id="activeTabId"
       :always-on-top="alwaysOnTop"
+      :transparency-enabled="transparencyEnabled"
+      :window-opacity="windowOpacity"
       :tab-layout="tabBarLayout"
       :collapsed="verticalTabsCollapsed"
       @switch-tab="switchTab"
@@ -83,6 +89,8 @@ const {
       @maximize="maximizeWindow"
       @close-window="closeWindow"
       @toggle-always-on-top="applyAlwaysOnTop"
+      @toggle-transparency="applyTransparencyEnabled"
+      @set-window-opacity="applyWindowOpacity"
       @toggle-collapse="toggleVerticalTabsCollapsed"
     />
 
@@ -91,6 +99,8 @@ const {
         :address-bar="addressBar"
         :bookmarked="isBookmarked"
         :always-on-top="alwaysOnTop"
+        :transparency-enabled="transparencyEnabled"
+        :window-opacity="windowOpacity"
         :connection-security="connectionSecurity"
         :connection-security-text="connectionSecurityText"
         :connection-certificate="connectionCertificate"
@@ -111,6 +121,8 @@ const {
         @maximize="maximizeWindow"
         @close-window="closeWindow"
         @toggle-always-on-top="applyAlwaysOnTop"
+        @toggle-transparency="applyTransparencyEnabled"
+        @set-window-opacity="applyWindowOpacity"
       />
 
       <BookmarksBar

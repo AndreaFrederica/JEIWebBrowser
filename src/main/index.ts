@@ -22,6 +22,8 @@ import * as tls from 'node:tls'
 interface Settings {
   shortcut: string
   alwaysOnTop: boolean
+  transparencyEnabled: boolean
+  windowOpacity: number
   homePage: string
   showBookmarksBar: boolean
   tabBarLayout: 'horizontal' | 'vertical'
@@ -131,16 +133,29 @@ const auxWindows = new Set<BrowserWindow>()
 let tray: Tray | null = null
 let isAppQuitting = false
 const isDev = Boolean(process.env['ELECTRON_RENDERER_URL'])
+const DEFAULT_WINDOW_OPACITY = 0.85
+const MIN_WINDOW_OPACITY = 0.35
+
+function clampWindowOpacity(value: unknown): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) return DEFAULT_WINDOW_OPACITY
+  if (numeric < MIN_WINDOW_OPACITY) return MIN_WINDOW_OPACITY
+  if (numeric > 1) return 1
+  return Math.round(numeric * 100) / 100
+}
 
 // Get settings with defaults
 function getSettings(): Settings {
   const tabBarLayout = store.get('tabBarLayout', 'horizontal')
   const normalizedLayout = tabBarLayout === 'vertical' ? 'vertical' : 'horizontal'
   const searchEngine = normalizeSearchEngine(store.get('searchEngine', 'bing'))
+  const windowOpacity = clampWindowOpacity(store.get('windowOpacity', DEFAULT_WINDOW_OPACITY))
 
   return {
     shortcut: store.get('shortcut', 'CommandOrControl+F8') as string,
     alwaysOnTop: store.get('alwaysOnTop', true) as boolean,
+    transparencyEnabled: store.get('transparencyEnabled', false) as boolean,
+    windowOpacity,
     homePage: store.get('homePage', INTERNAL_HOME) as string,
     showBookmarksBar: store.get('showBookmarksBar', true) as boolean,
     tabBarLayout: normalizedLayout,
@@ -360,6 +375,25 @@ function toggleWindowVisible(win: BrowserWindow): void {
     hideWindow(win)
   } else {
     showWindow(win)
+  }
+}
+
+function applyWindowTransparency(win: BrowserWindow, enabled: boolean, opacity: number): void {
+  const targetOpacity = enabled ? clampWindowOpacity(opacity) : 1
+  try {
+    win.setOpacity(targetOpacity)
+  } catch {
+    // Ignore platforms that do not support opacity.
+  }
+}
+
+function applyTransparencyToAllWindows(enabled: boolean, opacity: number): void {
+  if (mainWindow) {
+    applyWindowTransparency(mainWindow, enabled, opacity)
+  }
+  for (const win of auxWindows) {
+    if (win.isDestroyed()) continue
+    applyWindowTransparency(win, enabled, opacity)
   }
 }
 
@@ -597,6 +631,7 @@ function createWindow(): void {
   if (settings.alwaysOnTop) {
     mainWindow.setAlwaysOnTop(true, 'screen-saver')
   }
+  applyWindowTransparency(mainWindow, settings.transparencyEnabled, settings.windowOpacity)
   registerTaskbarThumbarButtons(mainWindow)
 
   // Load the renderer
@@ -659,6 +694,7 @@ function createAuxWindow(initialUrl?: string): void {
   if (settings.alwaysOnTop) {
     win.setAlwaysOnTop(true, 'screen-saver')
   }
+  applyWindowTransparency(win, settings.transparencyEnabled, settings.windowOpacity)
 
   if (isDev) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'] as string)
@@ -821,6 +857,20 @@ ipcMain.on('toggle-always-on-top', (_event, flag: boolean) => {
   }
 })
 
+ipcMain.on('toggle-window-transparency', (_event, enabled: boolean) => {
+  const nextEnabled = !!enabled
+  safeStoreSet('transparencyEnabled', nextEnabled)
+  const opacity = clampWindowOpacity(store.get('windowOpacity', DEFAULT_WINDOW_OPACITY))
+  applyTransparencyToAllWindows(nextEnabled, opacity)
+})
+
+ipcMain.on('set-window-opacity', (_event, opacity: number) => {
+  const nextOpacity = clampWindowOpacity(opacity)
+  safeStoreSet('windowOpacity', nextOpacity)
+  const enabled = !!store.get('transparencyEnabled', false)
+  applyTransparencyToAllWindows(enabled, nextOpacity)
+})
+
 ipcMain.on('toggle-devtools', () => {
   if (mainWindow) {
     if (mainWindow.webContents.isDevToolsOpened()) {
@@ -913,6 +963,10 @@ ipcMain.on('save-settings', (event, newSettings: Settings) => {
   const current = getSettings()
   const nextShortcut = typeof newSettings?.shortcut === 'string' ? newSettings.shortcut : current.shortcut
   const nextHomePage = typeof newSettings?.homePage === 'string' ? newSettings.homePage : current.homePage
+  const nextTransparencyEnabled =
+    typeof newSettings?.transparencyEnabled === 'boolean' ? newSettings.transparencyEnabled : current.transparencyEnabled
+  const nextWindowOpacity =
+    typeof newSettings?.windowOpacity === 'number' ? clampWindowOpacity(newSettings.windowOpacity) : current.windowOpacity
   const nextShowBookmarksBar =
     typeof newSettings?.showBookmarksBar === 'boolean' ? newSettings.showBookmarksBar : current.showBookmarksBar
   const nextSearchEngine = normalizeSearchEngine(newSettings?.searchEngine)
@@ -929,11 +983,14 @@ ipcMain.on('save-settings', (event, newSettings: Settings) => {
 
   safeStoreSet('shortcut', nextShortcut)
   safeStoreSet('homePage', nextHomePage)
+  safeStoreSet('transparencyEnabled', nextTransparencyEnabled)
+  safeStoreSet('windowOpacity', nextWindowOpacity)
   safeStoreSet('showBookmarksBar', nextShowBookmarksBar)
   safeStoreSet('searchEngine', nextSearchEngine)
   safeStoreSet('tabBarLayout', nextTabBarLayout)
   safeStoreSet('verticalTabsCollapsed', nextVerticalTabsCollapsed)
   // alwaysOnTop is handled separately by toggle-always-on-top usually, but we can sync here too
+  applyTransparencyToAllWindows(nextTransparencyEnabled, nextWindowOpacity)
 
   // Re-register shortcut
   const success = registerGlobalShortcut(nextShortcut)
@@ -945,6 +1002,10 @@ ipcMain.handle('save-settings-data', async (_event, newSettings: Settings) => {
   const nextShortcut = typeof newSettings?.shortcut === 'string' ? newSettings.shortcut : current.shortcut
   const nextHomePage = typeof newSettings?.homePage === 'string' ? newSettings.homePage : current.homePage
   const nextAlwaysOnTop = typeof newSettings?.alwaysOnTop === 'boolean' ? newSettings.alwaysOnTop : current.alwaysOnTop
+  const nextTransparencyEnabled =
+    typeof newSettings?.transparencyEnabled === 'boolean' ? newSettings.transparencyEnabled : current.transparencyEnabled
+  const nextWindowOpacity =
+    typeof newSettings?.windowOpacity === 'number' ? clampWindowOpacity(newSettings.windowOpacity) : current.windowOpacity
   const nextTabBarLayout =
     newSettings?.tabBarLayout === 'vertical'
       ? 'vertical'
@@ -962,6 +1023,8 @@ ipcMain.handle('save-settings-data', async (_event, newSettings: Settings) => {
   safeStoreSet('shortcut', nextShortcut)
   safeStoreSet('homePage', nextHomePage)
   safeStoreSet('alwaysOnTop', nextAlwaysOnTop)
+  safeStoreSet('transparencyEnabled', nextTransparencyEnabled)
+  safeStoreSet('windowOpacity', nextWindowOpacity)
   safeStoreSet('showBookmarksBar', nextShowBookmarksBar)
   safeStoreSet('searchEngine', nextSearchEngine)
   safeStoreSet('tabBarLayout', nextTabBarLayout)
@@ -971,6 +1034,7 @@ ipcMain.handle('save-settings-data', async (_event, newSettings: Settings) => {
     const level = nextAlwaysOnTop ? 'screen-saver' : 'normal'
     mainWindow.setAlwaysOnTop(nextAlwaysOnTop, level)
   }
+  applyTransparencyToAllWindows(nextTransparencyEnabled, nextWindowOpacity)
 
   const success = registerGlobalShortcut(nextShortcut)
   return { success }

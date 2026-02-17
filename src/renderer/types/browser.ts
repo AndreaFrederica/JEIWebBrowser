@@ -34,6 +34,8 @@ export interface HistoryItem {
 export interface SettingsPayload {
   shortcut: string
   alwaysOnTop: boolean
+  transparencyEnabled: boolean
+  windowOpacity: number
   homePage: string
   showBookmarksBar: boolean
   tabBarLayout: 'horizontal' | 'vertical'

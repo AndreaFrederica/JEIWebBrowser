@@ -5,6 +5,7 @@ import {
   ArrowRight,
   Bookmark,
   Clock3,
+  Droplets,
   Globe,
   Home,
   Lock,
@@ -18,13 +19,15 @@ import {
   Unlock,
   X
 } from 'lucide-vue-next'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { ConnectionCertificateInfo, ConnectionSecurityState } from '../types/browser'
 
 const props = defineProps<{
   addressBar: string
   bookmarked: boolean
   alwaysOnTop: boolean
+  transparencyEnabled: boolean
+  windowOpacity: number
   showWindowControls: boolean
   connectionSecurity: ConnectionSecurityState
   connectionSecurityText: string
@@ -48,11 +51,49 @@ const emit = defineEmits<{
   maximize: []
   closeWindow: []
   toggleAlwaysOnTop: [value: boolean]
+  toggleTransparency: [value: boolean]
+  setWindowOpacity: [value: number]
 }>()
 
 const securityButtonRef = ref<HTMLElement | null>(null)
 const securityPopoverRef = ref<HTMLElement | null>(null)
 const securityPopoverOpen = ref(false)
+const opacityMenuVisible = ref(false)
+const opacityMenuX = ref(0)
+const opacityMenuY = ref(0)
+const opacityPresets = [1, 0.9, 0.8, 0.7, 0.6, 0.5]
+const opacityMenuRef = ref<HTMLElement | null>(null)
+
+function setMenuPosition(
+  element: HTMLElement,
+  x: number,
+  y: number,
+  offsetY = 0,
+  minTop = 42
+): { x: number; y: number } {
+  const pad = 8
+  const width = element.offsetWidth || 220
+  const height = element.offsetHeight || 150
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
+
+  let nextX = x
+  let nextY = y + offsetY
+
+  if (nextX + width + pad > viewportWidth) {
+    nextX = Math.max(pad, viewportWidth - width - pad)
+  }
+
+  if (nextY + height + pad > viewportHeight) {
+    nextY = Math.max(minTop, viewportHeight - height - pad)
+  }
+
+  if (nextY < minTop) {
+    nextY = minTop
+  }
+
+  return { x: nextX, y: nextY }
+}
 
 const parsedAddress = computed(() => {
   const raw = (props.addressBar || '').trim()
@@ -117,30 +158,60 @@ function closeSecurityPopover(): void {
   securityPopoverOpen.value = false
 }
 
+function openOpacityMenu(event: MouseEvent): void {
+  event.preventDefault()
+  opacityMenuX.value = event.clientX
+  opacityMenuY.value = event.clientY
+  opacityMenuVisible.value = true
+  void nextTick(() => {
+    if (!opacityMenuRef.value) return
+    const positioned = setMenuPosition(opacityMenuRef.value, event.clientX, event.clientY, 8, 42)
+    opacityMenuX.value = positioned.x
+    opacityMenuY.value = positioned.y
+  })
+}
+
+function closeOpacityMenu(): void {
+  opacityMenuVisible.value = false
+}
+
 function onDocumentMouseDown(event: MouseEvent): void {
-  if (!securityPopoverOpen.value) return
   const target = event.target as Node | null
   if (!target) return
 
-  const clickInButton = !!securityButtonRef.value?.contains(target)
-  const clickInPopover = !!securityPopoverRef.value?.contains(target)
-  if (!clickInButton && !clickInPopover) {
-    closeSecurityPopover()
+  if (securityPopoverOpen.value) {
+    const clickInButton = !!securityButtonRef.value?.contains(target)
+    const clickInPopover = !!securityPopoverRef.value?.contains(target)
+    if (!clickInButton && !clickInPopover) {
+      closeSecurityPopover()
+    }
+  }
+
+  if (opacityMenuVisible.value) {
+    const inOpacityMenu = !!opacityMenuRef.value?.contains(target)
+    if (!inOpacityMenu) closeOpacityMenu()
   }
 }
 
 function onDocumentKeyDown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') closeSecurityPopover()
+  if (event.key === 'Escape') {
+    closeSecurityPopover()
+    closeOpacityMenu()
+  }
 }
 
 onMounted(() => {
-  document.addEventListener('mousedown', onDocumentMouseDown)
+  document.addEventListener('mousedown', onDocumentMouseDown, true)
   document.addEventListener('keydown', onDocumentKeyDown)
+  window.addEventListener('blur', closeOpacityMenu)
+  window.addEventListener('resize', closeOpacityMenu)
 })
 
 onBeforeUnmount(() => {
-  document.removeEventListener('mousedown', onDocumentMouseDown)
+  document.removeEventListener('mousedown', onDocumentMouseDown, true)
   document.removeEventListener('keydown', onDocumentKeyDown)
+  window.removeEventListener('blur', closeOpacityMenu)
+  window.removeEventListener('resize', closeOpacityMenu)
 })
 </script>
 
@@ -258,9 +329,46 @@ onBeforeUnmount(() => {
         <input type="checkbox" :checked="props.alwaysOnTop" @change="emit('toggleAlwaysOnTop', ($event.target as HTMLInputElement).checked)">
         <span class="pin-icon"><Pin :size="14" /></span>
       </label>
+      <label class="transparency-toggle" title="半透明（右键调透明度）" @contextmenu.prevent="openOpacityMenu">
+        <input type="checkbox" :checked="props.transparencyEnabled" @change="emit('toggleTransparency', ($event.target as HTMLInputElement).checked)">
+        <span class="transparency-icon"><Droplets :size="14" /></span>
+      </label>
       <button title="Minimize" @click="emit('minimize')"><Minimize2 :size="14" /></button>
       <button title="Maximize" @click="emit('maximize')"><Maximize2 :size="14" /></button>
       <button id="btn-close-inline" title="Hide (Ctrl+F8 to show)" @click="emit('closeWindow')"><X :size="14" /></button>
+    </div>
+
+    <div
+      v-if="opacityMenuVisible"
+      ref="opacityMenuRef"
+      id="nav-opacity-context-menu"
+      :style="{ left: `${opacityMenuX}px`, top: `${opacityMenuY}px` }"
+      @click.stop
+      @contextmenu.prevent
+    >
+      <div class="opacity-title">窗口透明度</div>
+      <div class="opacity-presets">
+        <button
+          v-for="preset in opacityPresets"
+          :key="preset"
+          class="opacity-item"
+          :class="{ active: Math.abs(props.windowOpacity - preset) < 0.01 }"
+          @click="emit('setWindowOpacity', preset)"
+        >
+          {{ Math.round(preset * 100) }}%
+        </button>
+      </div>
+      <div class="opacity-slider-row">
+        <input
+          class="opacity-slider"
+          type="range"
+          min="35"
+          max="100"
+          :value="Math.round(props.windowOpacity * 100)"
+          @input="emit('setWindowOpacity', Number(($event.target as HTMLInputElement).value) / 100)"
+        >
+        <span class="opacity-value">{{ Math.round(props.windowOpacity * 100) }}%</span>
+      </div>
     </div>
   </div>
 </template>
@@ -495,6 +603,25 @@ button svg {
   display: none;
 }
 
+.transparency-toggle {
+  width: 30px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #ccc;
+  border-radius: 4px;
+}
+
+.transparency-toggle:hover {
+  background-color: var(--hover-color);
+}
+
+.transparency-toggle input {
+  display: none;
+}
+
 .pin-icon {
   display: inline-flex;
   align-items: center;
@@ -505,5 +632,87 @@ button svg {
 .pin-toggle input:checked + .pin-icon {
   opacity: 1;
   color: #fff;
+}
+
+.transparency-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.45;
+  color: #8fb9ff;
+}
+
+.transparency-toggle input:checked + .transparency-icon {
+  opacity: 1;
+  color: #fff;
+  background: #35506a;
+}
+
+#nav-opacity-context-menu {
+  position: fixed;
+  z-index: 120;
+  width: 220px;
+  background: #252526;
+  border: 1px solid #3e3e42;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  padding: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.opacity-title {
+  font-size: 12px;
+  color: #ddd;
+  margin-bottom: 8px;
+}
+
+.opacity-presets {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.opacity-item {
+  border: 1px solid #3e3e42;
+  background: #2d2d2d;
+  color: #ddd;
+  padding: 5px 0;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.opacity-item:hover {
+  background: #3a3a3a;
+}
+
+.opacity-item.active {
+  border-color: #0063a5;
+  background: #007acc;
+  color: #fff;
+}
+
+.opacity-slider-row {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.opacity-slider {
+  flex: 1;
+}
+
+.opacity-value {
+  width: 42px;
+  text-align: right;
+  font-size: 12px;
+  color: #ccc;
 }
 </style>

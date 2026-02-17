@@ -37,6 +37,8 @@ declare global {
   interface Settings {
     shortcut: string
     alwaysOnTop: boolean
+    transparencyEnabled: boolean
+    windowOpacity: number
     homePage: string
     showBookmarksBar: boolean
     tabBarLayout: 'horizontal' | 'vertical'

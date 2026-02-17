@@ -5,6 +5,7 @@ import {
   ChevronsRight,
   Clock3,
   Database,
+  Droplets,
   Home,
   Maximize2,
   Minimize2,
@@ -13,7 +14,7 @@ import {
   Settings,
   X
 } from 'lucide-vue-next'
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { INTERNAL_BOOKMARKS, INTERNAL_HISTORY, INTERNAL_HOME, INTERNAL_SETTINGS, INTERNAL_STORAGE } from '../pages/internal-home'
 import type { TabItem } from '../types/browser'
 
@@ -21,6 +22,8 @@ const props = defineProps<{
   tabs: TabItem[]
   activeTabId: string | null
   alwaysOnTop: boolean
+  transparencyEnabled: boolean
+  windowOpacity: number
   tabLayout: 'horizontal' | 'vertical'
   collapsed: boolean
 }>()
@@ -33,6 +36,8 @@ const emit = defineEmits<{
   maximize: []
   closeWindow: []
   toggleAlwaysOnTop: [value: boolean]
+  toggleTransparency: [value: boolean]
+  setWindowOpacity: [value: number]
   toggleCollapse: []
 }>()
 
@@ -56,17 +61,109 @@ const tabMenuVisible = ref(false)
 const tabMenuX = ref(0)
 const tabMenuY = ref(0)
 const tabMenuTabId = ref<string | null>(null)
+const opacityMenuVisible = ref(false)
+const opacityMenuX = ref(0)
+const opacityMenuY = ref(0)
+const opacityPresets = [1, 0.9, 0.8, 0.7, 0.6, 0.5]
+const tabMenuRef = ref<HTMLElement | null>(null)
+const opacityMenuRef = ref<HTMLElement | null>(null)
+
+function setMenuPosition(
+  element: HTMLElement,
+  x: number,
+  y: number,
+  offsetY = 0,
+  minTop = 40
+): { x: number; y: number } {
+  const pad = 8
+  const width = element.offsetWidth || 180
+  const height = element.offsetHeight || 120
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
+
+  let nextX = x
+  let nextY = y + offsetY
+
+  if (nextX + width + pad > viewportWidth) {
+    nextX = Math.max(pad, viewportWidth - width - pad)
+  }
+
+  if (nextY + height + pad > viewportHeight) {
+    nextY = Math.max(minTop, viewportHeight - height - pad)
+  }
+
+  if (nextY < minTop) {
+    nextY = minTop
+  }
+
+  return { x: nextX, y: nextY }
+}
 
 function openTabMenu(event: MouseEvent, tabId: string): void {
+  closeOpacityMenu()
   tabMenuTabId.value = tabId
   tabMenuX.value = event.clientX
   tabMenuY.value = event.clientY
   tabMenuVisible.value = true
+  void nextTick(() => {
+    if (!tabMenuRef.value) return
+    const positioned = setMenuPosition(tabMenuRef.value, event.clientX, event.clientY, 6, 40)
+    tabMenuX.value = positioned.x
+    tabMenuY.value = positioned.y
+  })
 }
 
 function closeTabMenu(): void {
   tabMenuVisible.value = false
   tabMenuTabId.value = null
+}
+
+function openOpacityMenu(event: MouseEvent): void {
+  event.preventDefault()
+  closeTabMenu()
+  opacityMenuX.value = event.clientX
+  opacityMenuY.value = event.clientY
+  opacityMenuVisible.value = true
+  void nextTick(() => {
+    if (!opacityMenuRef.value) return
+    const positioned = setMenuPosition(opacityMenuRef.value, event.clientX, event.clientY, 8, 40)
+    opacityMenuX.value = positioned.x
+    opacityMenuY.value = positioned.y
+  })
+}
+
+function closeOpacityMenu(): void {
+  opacityMenuVisible.value = false
+}
+
+function setOpacity(value: number): void {
+  emit('setWindowOpacity', value)
+}
+
+function closeMenus(): void {
+  closeTabMenu()
+  closeOpacityMenu()
+}
+
+function onDocumentMouseDown(event: MouseEvent): void {
+  const target = event.target as Node | null
+  if (!target) return
+
+  if (tabMenuVisible.value) {
+    const inTabMenu = !!tabMenuRef.value?.contains(target)
+    if (!inTabMenu) closeTabMenu()
+  }
+
+  if (opacityMenuVisible.value) {
+    const inOpacityMenu = !!opacityMenuRef.value?.contains(target)
+    if (!inOpacityMenu) closeOpacityMenu()
+  }
+}
+
+function onDocumentKeyDown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    closeMenus()
+  }
 }
 
 function closeTabFromMenu(): void {
@@ -76,13 +173,17 @@ function closeTabFromMenu(): void {
 }
 
 onMounted(() => {
-  window.addEventListener('click', closeTabMenu)
-  window.addEventListener('blur', closeTabMenu)
+  document.addEventListener('mousedown', onDocumentMouseDown, true)
+  document.addEventListener('keydown', onDocumentKeyDown)
+  window.addEventListener('blur', closeMenus)
+  window.addEventListener('resize', closeMenus)
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('click', closeTabMenu)
-  window.removeEventListener('blur', closeTabMenu)
+  document.removeEventListener('mousedown', onDocumentMouseDown, true)
+  document.removeEventListener('keydown', onDocumentKeyDown)
+  window.removeEventListener('blur', closeMenus)
+  window.removeEventListener('resize', closeMenus)
 })
 </script>
 
@@ -137,6 +238,7 @@ onBeforeUnmount(() => {
 
     <div
       v-if="tabMenuVisible"
+      ref="tabMenuRef"
       id="tab-context-menu"
       :style="{ left: `${tabMenuX}px`, top: `${tabMenuY}px` }"
       @click.stop
@@ -145,10 +247,47 @@ onBeforeUnmount(() => {
       <button class="tab-menu-item" @click="closeTabFromMenu">关闭标签页</button>
     </div>
 
+    <div
+      v-if="opacityMenuVisible"
+      ref="opacityMenuRef"
+      id="opacity-context-menu"
+      :style="{ left: `${opacityMenuX}px`, top: `${opacityMenuY}px` }"
+      @click.stop
+      @contextmenu.prevent
+    >
+      <div class="opacity-title">窗口透明度</div>
+      <div class="opacity-presets">
+        <button
+          v-for="preset in opacityPresets"
+          :key="preset"
+          class="opacity-item"
+          :class="{ active: Math.abs(props.windowOpacity - preset) < 0.01 }"
+          @click="setOpacity(preset)"
+        >
+          {{ Math.round(preset * 100) }}%
+        </button>
+      </div>
+      <div class="opacity-slider-row">
+        <input
+          class="opacity-slider"
+          type="range"
+          min="35"
+          max="100"
+          :value="Math.round(props.windowOpacity * 100)"
+          @input="setOpacity(Number(($event.target as HTMLInputElement).value) / 100)"
+        >
+        <span class="opacity-value">{{ Math.round(props.windowOpacity * 100) }}%</span>
+      </div>
+    </div>
+
     <div v-if="props.tabLayout === 'horizontal'" id="window-controls">
       <label class="pin-toggle" title="Keep on top of games">
         <input type="checkbox" :checked="props.alwaysOnTop" @change="emit('toggleAlwaysOnTop', ($event.target as HTMLInputElement).checked)">
         <span class="pin-icon"><Pin :size="14" /></span>
+      </label>
+      <label class="transparency-toggle" title="半透明（右键调透明度）" @contextmenu.prevent="openOpacityMenu">
+        <input type="checkbox" :checked="props.transparencyEnabled" @change="emit('toggleTransparency', ($event.target as HTMLInputElement).checked)">
+        <span class="transparency-icon"><Droplets :size="14" /></span>
       </label>
       <button id="btn-minimize" title="Minimize" @click="emit('minimize')">
         <Minimize2 :size="14" />
@@ -325,6 +464,24 @@ onBeforeUnmount(() => {
   display: none;
 }
 
+.transparency-toggle {
+  width: 34px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #ccc;
+}
+
+.transparency-toggle:hover {
+  background-color: #555;
+}
+
+.transparency-toggle input {
+  display: none;
+}
+
 .pin-icon {
   display: inline-flex;
   align-items: center;
@@ -335,6 +492,25 @@ onBeforeUnmount(() => {
 .pin-toggle input:checked + .pin-icon {
   opacity: 1;
   color: #fff;
+}
+
+.transparency-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.45;
+  color: #8fb9ff;
+}
+
+.transparency-toggle input:checked + .transparency-icon {
+  opacity: 1;
+  color: #fff;
+  background: #35506a;
 }
 
 #window-controls button {
@@ -463,6 +639,69 @@ button svg,
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   overflow: hidden;
   -webkit-app-region: no-drag;
+}
+
+#opacity-context-menu {
+  position: fixed;
+  z-index: 500;
+  width: 220px;
+  background: #252526;
+  border: 1px solid #3e3e42;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  padding: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.opacity-title {
+  font-size: 12px;
+  color: #ddd;
+  margin-bottom: 8px;
+}
+
+.opacity-presets {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.opacity-item {
+  border: 1px solid #3e3e42;
+  background: #2d2d2d;
+  color: #ddd;
+  padding: 5px 0;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.opacity-item:hover {
+  background: #3a3a3a;
+}
+
+.opacity-item.active {
+  border-color: #0063a5;
+  background: #007acc;
+  color: #fff;
+}
+
+.opacity-slider-row {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.opacity-slider {
+  flex: 1;
+}
+
+.opacity-value {
+  width: 42px;
+  text-align: right;
+  font-size: 12px;
+  color: #ccc;
 }
 
 .tab-menu-item {

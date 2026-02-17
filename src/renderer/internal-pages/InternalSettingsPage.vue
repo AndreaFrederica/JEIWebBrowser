@@ -22,6 +22,8 @@ const emit = defineEmits<{
 const shortcut = ref('')
 const homePage = ref('jei://home')
 const alwaysOnTop = ref(false)
+const transparencyEnabled = ref(false)
+const windowOpacity = ref(0.85)
 const showBookmarksBar = ref(true)
 const tabBarLayout = ref<'horizontal' | 'vertical'>('horizontal')
 const searchEngine = ref<SearchEngineKey>('bing')
@@ -137,6 +139,9 @@ async function loadSettings(): Promise<void> {
     shortcut.value = settings.shortcut || ''
     homePage.value = settings.homePage || 'jei://home'
     alwaysOnTop.value = !!settings.alwaysOnTop
+    transparencyEnabled.value = !!settings.transparencyEnabled
+    const normalizedOpacity = Number(settings.windowOpacity)
+    windowOpacity.value = Number.isFinite(normalizedOpacity) ? Math.min(1, Math.max(0.35, normalizedOpacity)) : 0.85
     showBookmarksBar.value = typeof settings.showBookmarksBar === 'boolean' ? settings.showBookmarksBar : true
     tabBarLayout.value = settings.tabBarLayout === 'vertical' ? 'vertical' : 'horizontal'
     searchEngine.value = normalizeSearchEngine(settings.searchEngine)
@@ -157,6 +162,8 @@ async function saveSettings(): Promise<void> {
     shortcut: shortcut.value.trim(),
     homePage: (homePage.value || 'jei://home').trim(),
     alwaysOnTop: alwaysOnTop.value,
+    transparencyEnabled: transparencyEnabled.value,
+    windowOpacity: Math.min(1, Math.max(0.35, Number(windowOpacity.value) || 0.85)),
     showBookmarksBar: showBookmarksBar.value,
     tabBarLayout: tabBarLayout.value,
     searchEngine: searchEngine.value,
@@ -206,6 +213,23 @@ onBeforeUnmount(() => {
 
     <div class="field">
       <label><input v-model="alwaysOnTop" type="checkbox"> 置顶窗口</label>
+    </div>
+
+    <div class="field">
+      <label><input v-model="transparencyEnabled" type="checkbox"> 开启半透明窗口</label>
+    </div>
+
+    <div class="field">
+      <label for="window-opacity">窗口透明度（{{ Math.round(windowOpacity * 100) }}%）</label>
+      <input
+        id="window-opacity"
+        v-model.number="windowOpacity"
+        type="range"
+        min="0.35"
+        max="1"
+        step="0.01"
+        :disabled="!transparencyEnabled"
+      >
     </div>
 
     <div class="field">
@@ -297,6 +321,10 @@ input[type='text'] {
   border: 1px solid #2d2d2d;
   background: #252526;
   color: #fff;
+}
+
+input[type='range'] {
+  width: 100%;
 }
 
 select {

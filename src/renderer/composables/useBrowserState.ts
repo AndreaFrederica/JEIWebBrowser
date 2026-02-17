@@ -33,6 +33,8 @@ export function useBrowserState() {
   const activeTabId = ref<string | null>(null)
   const addressBar = ref('')
   const alwaysOnTop = ref(false)
+  const transparencyEnabled = ref(false)
+  const windowOpacity = ref(0.85)
   const showHistoryModal = ref(false)
   const showSettingsModal = ref(false)
   const showCloseConfirmModal = ref(false)
@@ -179,8 +181,18 @@ export function useBrowserState() {
     }, 180)
   }
 
+  function normalizeWindowOpacity(value: unknown): number {
+    const numeric = typeof value === 'number' ? value : Number(value)
+    if (!Number.isFinite(numeric)) return 0.85
+    if (numeric < 0.35) return 0.35
+    if (numeric > 1) return 1
+    return Math.round(numeric * 100) / 100
+  }
+
   function applySettings(settings: SettingsPayload): void {
     alwaysOnTop.value = settings.alwaysOnTop
+    transparencyEnabled.value = !!settings.transparencyEnabled
+    windowOpacity.value = normalizeWindowOpacity(settings.windowOpacity)
     settingShortcut.value = settings.shortcut
     settingHomepage.value = settings.homePage || INTERNAL_HOME
     homePage.value = settings.homePage || INTERNAL_HOME
@@ -481,6 +493,8 @@ export function useBrowserState() {
     const payload: SettingsPayload = {
       shortcut: settingShortcut.value,
       alwaysOnTop: alwaysOnTop.value,
+      transparencyEnabled: transparencyEnabled.value,
+      windowOpacity: windowOpacity.value,
       homePage: homePage.value,
       showBookmarksBar: showBookmarksBar.value,
       tabBarLayout: tabBarLayout.value,
@@ -498,6 +512,8 @@ export function useBrowserState() {
       shortcut: settingShortcut.value,
       homePage: nextHome,
       alwaysOnTop: alwaysOnTop.value,
+      transparencyEnabled: transparencyEnabled.value,
+      windowOpacity: windowOpacity.value,
       showBookmarksBar: showBookmarksBar.value,
       tabBarLayout: tabBarLayout.value,
       searchEngine: searchEngine.value,
@@ -590,6 +606,17 @@ export function useBrowserState() {
   function applyAlwaysOnTop(value: boolean): void {
     alwaysOnTop.value = value
     ipcRenderer.send('toggle-always-on-top', value)
+  }
+
+  function applyTransparencyEnabled(value: boolean): void {
+    transparencyEnabled.value = !!value
+    ipcRenderer.send('toggle-window-transparency', transparencyEnabled.value)
+  }
+
+  function applyWindowOpacity(value: number): void {
+    const normalized = normalizeWindowOpacity(value)
+    windowOpacity.value = normalized
+    ipcRenderer.send('set-window-opacity', normalized)
   }
 
   function openHistoryItem(url: string): void {
@@ -687,6 +714,8 @@ export function useBrowserState() {
     activeInternalUrl,
     addressBar,
     alwaysOnTop,
+    transparencyEnabled,
+    windowOpacity,
     showHistoryModal,
     showSettingsModal,
     showCloseConfirmModal,
@@ -731,6 +760,8 @@ export function useBrowserState() {
     openSettings,
     onAddressEnter,
     applyAlwaysOnTop,
+    applyTransparencyEnabled,
+    applyWindowOpacity,
     toggleVerticalTabsCollapsed,
     openBookmark,
     openBookmarkInNewTab,
