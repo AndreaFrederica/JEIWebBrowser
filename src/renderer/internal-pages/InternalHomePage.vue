@@ -36,6 +36,7 @@ const cards = ref<SiteCard[]>(
 const mirrors = computed(() => cards.value.filter((item) => item.group === 'mirrors'))
 const friends = computed(() => cards.value.filter((item) => item.group === 'friends'))
 const sources = computed(() => cards.value.filter((item) => item.group === 'sources'))
+const tools = computed(() => cards.value.filter((item) => item.group === 'tools'))
 
 function hostOf(value: string): string {
   try {
@@ -133,6 +134,20 @@ onMounted(() => {
       <h2>数据来源</h2>
       <div class="cards">
         <button v-for="item in sources" :key="item.url" class="card" @click="open(item.url)">
+          <img class="icon" :src="item.iconUrl" alt="">
+          <div class="meta">
+            <div class="title">{{ item.title }}</div>
+            <div class="desc">{{ item.desc }}</div>
+            <div class="url">{{ item.url }}</div>
+          </div>
+        </button>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>其他工具和资料</h2>
+      <div class="cards">
+        <button v-for="item in tools" :key="item.url" class="card" @click="open(item.url)">
           <img class="icon" :src="item.iconUrl" alt="">
           <div class="meta">
             <div class="title">{{ item.title }}</div>
