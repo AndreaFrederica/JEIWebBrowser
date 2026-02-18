@@ -1,6 +1,6 @@
 {
   "name": "JEIWebBrowser",
-  "productName": "JEI 浏览器",
+  "productName": "JEI Browser",
   "version": "1.0.0",
   "main": "./out/main/index.js",
   "type": "module",
