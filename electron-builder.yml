@@ -11,6 +11,7 @@ win:
       arch:
         - x64
   icon: icons/icon.png
+  productName: JEI Browser
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true

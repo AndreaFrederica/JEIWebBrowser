@@ -54,7 +54,7 @@
   },
   "build": {
     "appId": "com.jei.webbrowser",
-    "productName": "JEI 浏览器",
+    "productName": "JEI Browser",
     "directories": {
       "output": "release"
     },
