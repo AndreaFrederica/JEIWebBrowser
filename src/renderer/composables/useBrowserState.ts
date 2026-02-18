@@ -43,6 +43,8 @@ export function useBrowserState() {
   const settingShortcut = ref('')
   const homePage = ref(INTERNAL_HOME)
   const settingHomepage = ref(INTERNAL_HOME)
+  const gameExecutablePath = ref('')
+  const launcherExecutablePath = ref('')
   const showBookmarksBar = ref(true)
   const tabBarLayout = ref<'horizontal' | 'vertical'>('horizontal')
   const searchEngine = ref<SearchEngineKey>('bing')
@@ -197,6 +199,8 @@ export function useBrowserState() {
     settingShortcut.value = settings.shortcut
     settingHomepage.value = settings.homePage || INTERNAL_HOME
     homePage.value = settings.homePage || INTERNAL_HOME
+    gameExecutablePath.value = settings.gameExecutablePath || ''
+    launcherExecutablePath.value = settings.launcherExecutablePath || ''
     showBookmarksBar.value = settings.showBookmarksBar
     tabBarLayout.value = settings.tabBarLayout === 'vertical' ? 'vertical' : 'horizontal'
     searchEngine.value = normalizeSearchEngine(settings.searchEngine)
@@ -496,6 +500,8 @@ export function useBrowserState() {
       alwaysOnTop: alwaysOnTop.value,
       transparencyEnabled: transparencyEnabled.value,
       windowOpacity: windowOpacity.value,
+      gameExecutablePath: gameExecutablePath.value,
+      launcherExecutablePath: launcherExecutablePath.value,
       homePage: homePage.value,
       showBookmarksBar: showBookmarksBar.value,
       tabBarLayout: tabBarLayout.value,
@@ -515,6 +521,8 @@ export function useBrowserState() {
       alwaysOnTop: alwaysOnTop.value,
       transparencyEnabled: transparencyEnabled.value,
       windowOpacity: windowOpacity.value,
+      gameExecutablePath: gameExecutablePath.value,
+      launcherExecutablePath: launcherExecutablePath.value,
       showBookmarksBar: showBookmarksBar.value,
       tabBarLayout: tabBarLayout.value,
       searchEngine: searchEngine.value,

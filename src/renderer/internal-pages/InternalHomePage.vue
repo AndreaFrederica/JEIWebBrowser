@@ -38,7 +38,22 @@ const friends = computed(() => cards.value.filter((item) => item.group === 'frie
 const sources = computed(() => cards.value.filter((item) => item.group === 'sources'))
 const tools = computed(() => cards.value.filter((item) => item.group === 'tools'))
 const META_TIMEOUT_MS = 4500
+const gameExecutablePath = ref('')
+const launcherExecutablePath = ref('')
+const gameRunning = ref(false)
+const launcherRunning = ref(false)
+const launchToast = ref<{
+  visible: boolean
+  message: string
+  type: 'success' | 'error'
+}>({
+  visible: false,
+  message: '',
+  type: 'success'
+})
 let hydrateToken = 0
+let launchToastTimer: ReturnType<typeof setTimeout> | null = null
+let launchStatusPollTimer: ReturnType<typeof setInterval> | null = null
 
 function hostOf(value: string): string {
   try {
@@ -67,6 +82,72 @@ function submit(): void {
 
 function open(url: string): void {
   emit('navigate', url)
+}
+
+async function loadLaunchPaths(): Promise<void> {
+  try {
+    const settings = await ipcRenderer.invoke('get-settings-data')
+    if (!settings) return
+    gameExecutablePath.value = typeof settings.gameExecutablePath === 'string' ? settings.gameExecutablePath : ''
+    launcherExecutablePath.value =
+      typeof settings.launcherExecutablePath === 'string' ? settings.launcherExecutablePath : ''
+  } catch {
+    // Ignore settings read errors on home page.
+  }
+}
+
+async function refreshLaunchRuntimeStatus(): Promise<void> {
+  try {
+    const status = await ipcRenderer.invoke('get-launch-runtime-status')
+    gameRunning.value = !!status?.gameRunning
+    launcherRunning.value = !!status?.launcherRunning
+  } catch {
+    gameRunning.value = false
+    launcherRunning.value = false
+  }
+}
+
+async function launchConfiguredApp(target: 'game' | 'launcher'): Promise<void> {
+  if (launchToastTimer) {
+    clearTimeout(launchToastTimer)
+    launchToastTimer = null
+  }
+  try {
+    const result = (await ipcRenderer.invoke('launch-configured-app', target)) as { success?: boolean; message?: string } | null
+    if (result?.success) {
+      launchToast.value = {
+        visible: true,
+        message: target === 'game' ? '游戏启动成功' : '启动器已打开',
+        type: 'success'
+      }
+      launchToastTimer = setTimeout(() => {
+        launchToast.value.visible = false
+        launchToastTimer = null
+      }, 2400)
+    } else {
+      launchToast.value = {
+        visible: true,
+        message: result?.message || '启动失败，请先在设置中配置路径',
+        type: 'error'
+      }
+      launchToastTimer = setTimeout(() => {
+        launchToast.value.visible = false
+        launchToastTimer = null
+      }, 3200)
+    }
+  } catch {
+    launchToast.value = {
+      visible: true,
+      message: '启动失败，请先在设置中配置路径',
+      type: 'error'
+    }
+    launchToastTimer = setTimeout(() => {
+      launchToast.value.visible = false
+      launchToastTimer = null
+    }, 3200)
+  } finally {
+    await refreshLaunchRuntimeStatus()
+  }
 }
 
 async function hydrateCards(): Promise<void> {
@@ -98,11 +179,24 @@ async function hydrateCards(): Promise<void> {
 }
 
 onMounted(() => {
+  void loadLaunchPaths()
+  void refreshLaunchRuntimeStatus()
+  launchStatusPollTimer = setInterval(() => {
+    void refreshLaunchRuntimeStatus()
+  }, 1500)
   void hydrateCards()
 })
 
 onBeforeUnmount(() => {
   hydrateToken += 1
+  if (launchToastTimer) {
+    clearTimeout(launchToastTimer)
+    launchToastTimer = null
+  }
+  if (launchStatusPollTimer) {
+    clearInterval(launchStatusPollTimer)
+    launchStatusPollTimer = null
+  }
 })
 </script>
 
@@ -113,6 +207,25 @@ onBeforeUnmount(() => {
       <span class="pill">官方 QQ 群：<b>1080814651</b></span>
       <button class="join-btn" @click="open('http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=Zp45eM6yAUVlPrg_lO03L3E_Ctul4mvo&authKey=1Cgzkg3Msjbrd8dmWVXi%2Fm2VaB9wU5XAsHc%2BQrHEthIO%2F9lL7AH5MrKvOhJXavDv&noverify=0&group_code=1080814651')">
         点击加入QQ交流群
+      </button>
+      <button
+        class="launch-btn"
+        :disabled="!gameExecutablePath || gameRunning"
+        :title="!gameExecutablePath ? '请先在设置页配置游戏路径' : gameRunning ? '游戏正在运行中' : '启动游戏'"
+        @click="launchConfiguredApp('game')"
+      >
+        {{ gameRunning ? '游戏运行中' : '启动游戏' }}
+      </button>
+      <button
+        class="launch-btn"
+        :disabled="!launcherExecutablePath || launcherRunning"
+        :title="!launcherExecutablePath ? '请先在设置页配置启动器路径' : launcherRunning ? '启动器正在运行中' : '启动鹰角启动器'"
+        @click="launchConfiguredApp('launcher')"
+      >
+        {{ launcherRunning ? '启动器运行中' : '启动鹰角启动器' }}
+      </button>
+      <button class="launch-btn secondary" @click="emit('navigate', 'jei://settings')">
+        配置路径
       </button>
       <div class="note">有任何反馈和希望参与开发都可以加入，也支持明日方舟：终末地（以及任何我们支持的游戏和 Minecraft）的游戏讨论。</div>
     </div>
@@ -182,6 +295,12 @@ onBeforeUnmount(() => {
       <h2>声明</h2>
       <div class="note">免责声明：JEI-Web 和 Minecraft Mod JEI 没有任何隶属和其他关系，仅仅是灵感来源于 JEI Mod。</div>
     </section>
+
+    <transition name="toast-fade">
+      <div v-if="launchToast.visible" class="edge-toast" :class="launchToast.type">
+        {{ launchToast.message }}
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -241,6 +360,73 @@ h1 {
 .join-btn:hover {
   background: #0d9f73;
   border-color: #0d9f73;
+}
+
+.launch-btn {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid #2d2d2d;
+  background: #3a3f4b;
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.launch-btn:hover {
+  background: #495267;
+}
+
+.launch-btn.secondary {
+  background: #252526;
+}
+
+.launch-btn.secondary:hover {
+  background: #2d2d2d;
+}
+
+.launch-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.edge-toast {
+  position: fixed;
+  top: 74px;
+  right: 14px;
+  z-index: 80;
+  min-width: 220px;
+  max-width: 360px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid #2d2d2d;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  line-height: 1.4;
+  color: #fff;
+  pointer-events: none;
+}
+
+.edge-toast.success {
+  background: #1f6e4f;
+  border-color: #2a8d66;
+}
+
+.edge-toast.error {
+  background: #6a2a2a;
+  border-color: #8f3a3a;
+}
+
+.toast-fade-enter-active,
+.toast-fade-leave-active {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.toast-fade-enter-from,
+.toast-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
 }
 
 .search {

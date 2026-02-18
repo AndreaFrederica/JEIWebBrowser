@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Keyboard } from 'lucide-vue-next'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { SettingsPayload } from '../types/browser'
 import { normalizeSearchEngine, SEARCH_ENGINE_OPTIONS, type SearchEngineKey } from '../utils/search'
@@ -24,12 +25,15 @@ const homePage = ref('jei://home')
 const alwaysOnTop = ref(false)
 const transparencyEnabled = ref(false)
 const windowOpacity = ref(0.85)
+const gameExecutablePath = ref('')
+const launcherExecutablePath = ref('')
 const showBookmarksBar = ref(true)
 const tabBarLayout = ref<'horizontal' | 'vertical'>('horizontal')
 const searchEngine = ref<SearchEngineKey>('bing')
 const verticalTabsCollapsed = ref(false)
 const status = ref('')
-const shortcutHelp = ref('点击“录制快捷键”后按下组合键，例如 Ctrl + Shift + F8。')
+const SHORTCUT_RECORDING_HELP = '点击“录制快捷键”后按下组合键，例如 Ctrl + Shift + F8。'
+const shortcutHelp = ref(SHORTCUT_RECORDING_HELP)
 const isRecordingShortcut = ref(false)
 
 function keyFromEvent(event: KeyboardEvent): string {
@@ -91,9 +95,22 @@ function buildAccelerator(event: KeyboardEvent): string {
   return parts.join('+')
 }
 
+async function setShortcutRecordingMode(enabled: boolean): Promise<boolean> {
+  try {
+    const result = await ipcRenderer.invoke('set-shortcut-recording-mode', enabled)
+    return !!result?.success
+  } catch {
+    return false
+  }
+}
+
 function stopShortcutRecording(): void {
+  const wasRecording = isRecordingShortcut.value
   isRecordingShortcut.value = false
   window.removeEventListener('keydown', onShortcutKeydown, true)
+  if (wasRecording) {
+    void setShortcutRecordingMode(false)
+  }
 }
 
 function onShortcutKeydown(event: KeyboardEvent): void {
@@ -118,16 +135,23 @@ function onShortcutKeydown(event: KeyboardEvent): void {
   shortcutHelp.value = `已录制：${accelerator}`
 }
 
-function toggleShortcutRecording(): void {
-  isRecordingShortcut.value = !isRecordingShortcut.value
+async function toggleShortcutRecording(): Promise<void> {
   if (isRecordingShortcut.value) {
-    shortcutHelp.value = '正在录制，请按下组合键。按 Esc 取消。'
-    window.addEventListener('keydown', onShortcutKeydown, true)
+    stopShortcutRecording()
+    shortcutHelp.value = SHORTCUT_RECORDING_HELP
     return
   }
 
-  window.removeEventListener('keydown', onShortcutKeydown, true)
-  shortcutHelp.value = '点击“录制快捷键”后按下组合键，例如 Ctrl + Shift + F8。'
+  const enabled = await setShortcutRecordingMode(true)
+  if (!enabled) {
+    isRecordingShortcut.value = false
+    shortcutHelp.value = '进入录制模式失败，请重试。'
+    return
+  }
+
+  isRecordingShortcut.value = true
+  shortcutHelp.value = '正在录制，请按下组合键。按 Esc 取消。'
+  window.addEventListener('keydown', onShortcutKeydown, true)
 }
 
 async function loadSettings(): Promise<void> {
@@ -142,12 +166,14 @@ async function loadSettings(): Promise<void> {
     transparencyEnabled.value = !!settings.transparencyEnabled
     const normalizedOpacity = Number(settings.windowOpacity)
     windowOpacity.value = Number.isFinite(normalizedOpacity) ? Math.min(1, Math.max(0.35, normalizedOpacity)) : 0.85
+    gameExecutablePath.value = settings.gameExecutablePath || ''
+    launcherExecutablePath.value = settings.launcherExecutablePath || ''
     showBookmarksBar.value = typeof settings.showBookmarksBar === 'boolean' ? settings.showBookmarksBar : true
     tabBarLayout.value = settings.tabBarLayout === 'vertical' ? 'vertical' : 'horizontal'
     searchEngine.value = normalizeSearchEngine(settings.searchEngine)
     verticalTabsCollapsed.value = !!settings.verticalTabsCollapsed
     status.value = '设置已加载'
-    shortcutHelp.value = '点击“录制快捷键”后按下组合键，例如 Ctrl + Shift + F8。'
+    shortcutHelp.value = SHORTCUT_RECORDING_HELP
   } catch {
     status.value = '读取设置失败'
   }
@@ -157,6 +183,26 @@ function toggleDevTools(): void {
   ipcRenderer.send('toggle-devtools')
 }
 
+async function chooseExecutable(target: 'game' | 'launcher'): Promise<void> {
+  try {
+    const title = target === 'game' ? '选择游戏可执行文件' : '选择鹰角启动器可执行文件'
+    const defaultPath = target === 'game' ? gameExecutablePath.value : launcherExecutablePath.value
+    const selected = await ipcRenderer.invoke('select-executable-file', {
+      title,
+      defaultPath
+    })
+    if (typeof selected !== 'string' || !selected.trim()) return
+
+    if (target === 'game') {
+      gameExecutablePath.value = selected.trim()
+    } else {
+      launcherExecutablePath.value = selected.trim()
+    }
+  } catch {
+    status.value = '选择文件失败'
+  }
+}
+
 async function saveSettings(): Promise<void> {
   const payload: SettingsPayload = {
     shortcut: shortcut.value.trim(),
@@ -164,6 +210,8 @@ async function saveSettings(): Promise<void> {
     alwaysOnTop: alwaysOnTop.value,
     transparencyEnabled: transparencyEnabled.value,
     windowOpacity: Math.min(1, Math.max(0.35, Number(windowOpacity.value) || 0.85)),
+    gameExecutablePath: gameExecutablePath.value.trim(),
+    launcherExecutablePath: launcherExecutablePath.value.trim(),
     showBookmarksBar: showBookmarksBar.value,
     tabBarLayout: tabBarLayout.value,
     searchEngine: searchEngine.value,
@@ -199,8 +247,16 @@ onBeforeUnmount(() => {
       <label for="shortcut">快捷键</label>
       <div class="bar">
         <input id="shortcut" v-model="shortcut" type="text" placeholder="CommandOrControl+F8">
-        <button :class="{ secondary: !isRecordingShortcut }" @click="toggleShortcutRecording">
-          {{ isRecordingShortcut ? '按下组合键...' : '录制快捷键' }}
+        <button
+          type="button"
+          class="shortcut-record-btn"
+          :class="{ secondary: !isRecordingShortcut, recording: isRecordingShortcut }"
+          :title="isRecordingShortcut ? '正在录制，按 Esc 取消' : '录制快捷键'"
+          :aria-label="isRecordingShortcut ? '正在录制快捷键，按 Esc 取消' : '录制快捷键'"
+          @click="toggleShortcutRecording"
+        >
+          <Keyboard :size="16" />
+          <span v-if="isRecordingShortcut" class="record-dot" aria-hidden="true"></span>
         </button>
       </div>
       <div class="status">{{ shortcutHelp }}</div>
@@ -209,6 +265,24 @@ onBeforeUnmount(() => {
     <div class="field">
       <label for="homepage">主页（例如 jei://home）</label>
       <input id="homepage" v-model="homePage" type="text" placeholder="jei://home">
+    </div>
+
+    <div class="field">
+      <label for="game-executable-path">游戏可执行文件路径</label>
+      <div class="path-picker">
+        <input id="game-executable-path" v-model="gameExecutablePath" type="text" readonly placeholder="未设置">
+        <button class="secondary" @click="chooseExecutable('game')">选择文件</button>
+        <button class="secondary" @click="gameExecutablePath = ''">清空</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="launcher-executable-path">鹰角启动器路径</label>
+      <div class="path-picker">
+        <input id="launcher-executable-path" v-model="launcherExecutablePath" type="text" readonly placeholder="未设置">
+        <button class="secondary" @click="chooseExecutable('launcher')">选择文件</button>
+        <button class="secondary" @click="launcherExecutablePath = ''">清空</button>
+      </div>
     </div>
 
     <div class="field">
@@ -301,6 +375,15 @@ h1 {
   margin-bottom: 16px;
 }
 
+.path-picker {
+  display: flex;
+  gap: 10px;
+}
+
+.path-picker input {
+  flex: 1;
+}
+
 button {
   padding: 10px 12px;
   border-radius: 8px;
@@ -312,6 +395,31 @@ button {
 
 button.secondary {
   background: #252526;
+}
+
+.shortcut-record-btn {
+  position: relative;
+  width: 40px;
+  min-width: 40px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.shortcut-record-btn.recording {
+  background: #0f62fe;
+}
+
+.record-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ff4d4f;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
 }
 
 input[type='text'] {

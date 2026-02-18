@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  dialog,
   globalShortcut,
   ipcMain,
   Menu,
@@ -14,16 +15,22 @@ import {
   type WebContents
 } from 'electron'
 import path from 'path'
+import { stat } from 'node:fs/promises'
 import Store from 'electron-store'
 import contextMenu from 'electron-context-menu'
 import { URL, pathToFileURL } from 'url'
 import * as tls from 'node:tls'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 
 interface Settings {
   shortcut: string
   alwaysOnTop: boolean
   transparencyEnabled: boolean
   windowOpacity: number
+  windowWidth: number
+  windowHeight: number
+  gameExecutablePath: string
+  launcherExecutablePath: string
   homePage: string
   showBookmarksBar: boolean
   tabBarLayout: 'horizontal' | 'vertical'
@@ -133,8 +140,25 @@ const auxWindows = new Set<BrowserWindow>()
 let tray: Tray | null = null
 let isAppQuitting = false
 const isDev = Boolean(process.env['ELECTRON_RENDERER_URL'])
+type LaunchTarget = 'game' | 'launcher'
+interface LaunchedAppState {
+  starting: boolean
+  running: boolean
+  pid: number | null
+  executablePath: string
+  child: ChildProcess | null
+}
+
+const launchedApps: Record<LaunchTarget, LaunchedAppState> = {
+  game: { starting: false, running: false, pid: null, executablePath: '', child: null },
+  launcher: { starting: false, running: false, pid: null, executablePath: '', child: null }
+}
+let launchRuntimeMonitor: ReturnType<typeof setInterval> | null = null
+let isShortcutRecordingMode = false
 const DEFAULT_WINDOW_OPACITY = 0.85
 const MIN_WINDOW_OPACITY = 0.35
+const MIN_WINDOW_WIDTH = 900
+const MIN_WINDOW_HEIGHT = 620
 
 function clampWindowOpacity(value: unknown): number {
   const numeric = typeof value === 'number' ? value : Number(value)
@@ -144,18 +168,37 @@ function clampWindowOpacity(value: unknown): number {
   return Math.round(numeric * 100) / 100
 }
 
+function normalizeWindowSize(value: unknown, fallback: number, min: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric) || numeric <= 0) return fallback
+  return Math.max(min, Math.round(numeric))
+}
+
 // Get settings with defaults
 function getSettings(): Settings {
   const tabBarLayout = store.get('tabBarLayout', 'horizontal')
   const normalizedLayout = tabBarLayout === 'vertical' ? 'vertical' : 'horizontal'
   const searchEngine = normalizeSearchEngine(store.get('searchEngine', 'bing'))
   const windowOpacity = clampWindowOpacity(store.get('windowOpacity', DEFAULT_WINDOW_OPACITY))
+  const { width: workAreaWidth, height: workAreaHeight } = screen.getPrimaryDisplay().workAreaSize
+  const defaultWindowWidth = Math.floor(workAreaWidth * 0.8)
+  const defaultWindowHeight = Math.floor(workAreaHeight * 0.8)
+  const windowWidth = normalizeWindowSize(store.get('windowWidth', defaultWindowWidth), defaultWindowWidth, MIN_WINDOW_WIDTH)
+  const windowHeight = normalizeWindowSize(
+    store.get('windowHeight', defaultWindowHeight),
+    defaultWindowHeight,
+    MIN_WINDOW_HEIGHT
+  )
 
   return {
     shortcut: store.get('shortcut', 'CommandOrControl+F8') as string,
     alwaysOnTop: store.get('alwaysOnTop', true) as boolean,
     transparencyEnabled: store.get('transparencyEnabled', false) as boolean,
     windowOpacity,
+    windowWidth,
+    windowHeight,
+    gameExecutablePath: store.get('gameExecutablePath', '') as string,
+    launcherExecutablePath: store.get('launcherExecutablePath', '') as string,
     homePage: store.get('homePage', INTERNAL_HOME) as string,
     showBookmarksBar: store.get('showBookmarksBar', true) as boolean,
     tabBarLayout: normalizedLayout,
@@ -404,6 +447,40 @@ function applyTransparencyToAllWindows(enabled: boolean, opacity: number): void 
   }
 }
 
+function persistWindowSize(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  if (win.isMinimized()) return
+
+  const bounds = win.getBounds()
+  if (!bounds?.width || !bounds?.height) return
+
+  safeStoreSet('windowWidth', Math.max(MIN_WINDOW_WIDTH, Math.round(bounds.width)))
+  safeStoreSet('windowHeight', Math.max(MIN_WINDOW_HEIGHT, Math.round(bounds.height)))
+}
+
+function installWindowSizePersistence(win: BrowserWindow): void {
+  let resizeTimer: ReturnType<typeof setTimeout> | null = null
+
+  const schedulePersist = () => {
+    if (resizeTimer) clearTimeout(resizeTimer)
+    resizeTimer = setTimeout(() => {
+      resizeTimer = null
+      persistWindowSize(win)
+    }, 120)
+  }
+
+  win.on('resize', schedulePersist)
+  win.on('unmaximize', schedulePersist)
+  win.on('hide', () => persistWindowSize(win))
+  win.on('close', () => persistWindowSize(win))
+  win.on('closed', () => {
+    if (resizeTimer) {
+      clearTimeout(resizeTimer)
+      resizeTimer = null
+    }
+  })
+}
+
 function quitApplication(): void {
   isAppQuitting = true
   app.quit()
@@ -600,6 +677,11 @@ async function fetchSiteMeta(url: string): Promise<{ title?: string; iconUrl?: s
 }
 
 function registerGlobalShortcut(shortcut: string): boolean {
+  if (isShortcutRecordingMode) {
+    globalShortcut.unregisterAll()
+    return true
+  }
+
   globalShortcut.unregisterAll()
 
   try {
@@ -622,13 +704,27 @@ function registerGlobalShortcut(shortcut: string): boolean {
   }
 }
 
+function setShortcutRecordingMode(enabled: boolean): { success: boolean } {
+  isShortcutRecordingMode = !!enabled
+  if (isShortcutRecordingMode) {
+    globalShortcut.unregisterAll()
+    return { success: true }
+  }
+
+  const settings = getSettings()
+  const success = registerGlobalShortcut(settings.shortcut)
+  return { success }
+}
+
 function createWindow(): void {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize
   const settings = getSettings()
+  const initialWidth = Math.min(width, Math.max(MIN_WINDOW_WIDTH, settings.windowWidth || Math.floor(width * 0.8)))
+  const initialHeight = Math.min(height, Math.max(MIN_WINDOW_HEIGHT, settings.windowHeight || Math.floor(height * 0.8)))
 
   mainWindow = new BrowserWindow({
-    width: Math.floor(width * 0.8),
-    height: Math.floor(height * 0.8),
+    width: initialWidth,
+    height: initialHeight,
     icon: APP_ICON_PATH,
     frame: false, // Frameless for custom UI and better overlay
     transparent: false, // Set to true if you want transparency, but usually false for a browser
@@ -643,6 +739,7 @@ function createWindow(): void {
     show: false // Start hidden until ready
   })
   installWindowCloseGuard(mainWindow)
+  installWindowSizePersistence(mainWindow)
 
   // Apply correct alwaysOnTop level if enabled
   if (settings.alwaysOnTop) {
@@ -686,10 +783,12 @@ function createWindow(): void {
 function createAuxWindow(initialUrl?: string): void {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize
   const settings = getSettings()
+  const initialWidth = Math.min(width, Math.max(MIN_WINDOW_WIDTH, settings.windowWidth || Math.floor(width * 0.8)))
+  const initialHeight = Math.min(height, Math.max(MIN_WINDOW_HEIGHT, settings.windowHeight || Math.floor(height * 0.8)))
 
   const win = new BrowserWindow({
-    width: Math.floor(width * 0.8),
-    height: Math.floor(height * 0.8),
+    width: initialWidth,
+    height: initialHeight,
     icon: APP_ICON_PATH,
     frame: false,
     transparent: false,
@@ -751,6 +850,7 @@ app.on('web-contents-created', (_event, contents) => {
 
   if (contentsType === 'window' || contentsType === 'webview') {
     contents.on('before-input-event', (event, input) => {
+      if (isShortcutRecordingMode) return
       if (!isCtrlF5(input)) return
 
       event.preventDefault()
@@ -980,6 +1080,12 @@ ipcMain.on('save-settings', (event, newSettings: Settings) => {
   const current = getSettings()
   const nextShortcut = typeof newSettings?.shortcut === 'string' ? newSettings.shortcut : current.shortcut
   const nextHomePage = typeof newSettings?.homePage === 'string' ? newSettings.homePage : current.homePage
+  const nextGameExecutablePath =
+    typeof newSettings?.gameExecutablePath === 'string' ? newSettings.gameExecutablePath : current.gameExecutablePath
+  const nextLauncherExecutablePath =
+    typeof newSettings?.launcherExecutablePath === 'string'
+      ? newSettings.launcherExecutablePath
+      : current.launcherExecutablePath
   const nextTransparencyEnabled =
     typeof newSettings?.transparencyEnabled === 'boolean' ? newSettings.transparencyEnabled : current.transparencyEnabled
   const nextWindowOpacity =
@@ -1000,6 +1106,8 @@ ipcMain.on('save-settings', (event, newSettings: Settings) => {
 
   safeStoreSet('shortcut', nextShortcut)
   safeStoreSet('homePage', nextHomePage)
+  safeStoreSet('gameExecutablePath', nextGameExecutablePath)
+  safeStoreSet('launcherExecutablePath', nextLauncherExecutablePath)
   safeStoreSet('transparencyEnabled', nextTransparencyEnabled)
   safeStoreSet('windowOpacity', nextWindowOpacity)
   safeStoreSet('showBookmarksBar', nextShowBookmarksBar)
@@ -1019,6 +1127,12 @@ ipcMain.handle('save-settings-data', async (_event, newSettings: Settings) => {
   const nextShortcut = typeof newSettings?.shortcut === 'string' ? newSettings.shortcut : current.shortcut
   const nextHomePage = typeof newSettings?.homePage === 'string' ? newSettings.homePage : current.homePage
   const nextAlwaysOnTop = typeof newSettings?.alwaysOnTop === 'boolean' ? newSettings.alwaysOnTop : current.alwaysOnTop
+  const nextGameExecutablePath =
+    typeof newSettings?.gameExecutablePath === 'string' ? newSettings.gameExecutablePath : current.gameExecutablePath
+  const nextLauncherExecutablePath =
+    typeof newSettings?.launcherExecutablePath === 'string'
+      ? newSettings.launcherExecutablePath
+      : current.launcherExecutablePath
   const nextTransparencyEnabled =
     typeof newSettings?.transparencyEnabled === 'boolean' ? newSettings.transparencyEnabled : current.transparencyEnabled
   const nextWindowOpacity =
@@ -1040,6 +1154,8 @@ ipcMain.handle('save-settings-data', async (_event, newSettings: Settings) => {
   safeStoreSet('shortcut', nextShortcut)
   safeStoreSet('homePage', nextHomePage)
   safeStoreSet('alwaysOnTop', nextAlwaysOnTop)
+  safeStoreSet('gameExecutablePath', nextGameExecutablePath)
+  safeStoreSet('launcherExecutablePath', nextLauncherExecutablePath)
   safeStoreSet('transparencyEnabled', nextTransparencyEnabled)
   safeStoreSet('windowOpacity', nextWindowOpacity)
   safeStoreSet('showBookmarksBar', nextShowBookmarksBar)
@@ -1055,6 +1171,52 @@ ipcMain.handle('save-settings-data', async (_event, newSettings: Settings) => {
 
   const success = registerGlobalShortcut(nextShortcut)
   return { success }
+})
+
+ipcMain.handle('set-shortcut-recording-mode', async (_event, enabled: boolean) => {
+  return setShortcutRecordingMode(!!enabled)
+})
+
+ipcMain.handle(
+  'select-executable-file',
+  async (
+    event,
+    options?: {
+      title?: string
+      defaultPath?: string
+    }
+  ) => {
+    const targetWindow = senderWindow(event.sender)
+    const dialogOptions = {
+      title: options?.title || '选择可执行文件',
+      defaultPath: options?.defaultPath || undefined,
+      properties: ['openFile'] as ('openFile')[],
+      filters:
+        process.platform === 'win32'
+          ? [
+              { name: '可执行文件', extensions: ['exe', 'bat', 'cmd'] },
+              { name: '所有文件', extensions: ['*'] }
+            ]
+          : [{ name: '所有文件', extensions: ['*'] }]
+    }
+
+    const result = targetWindow
+      ? await dialog.showOpenDialog(targetWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions)
+
+    if (result.canceled || !result.filePaths[0]) return null
+    return result.filePaths[0]
+  }
+)
+
+ipcMain.handle('launch-configured-app', async (_event, target: 'game' | 'launcher') => {
+  const settings = getSettings()
+  const executablePath = target === 'launcher' ? settings.launcherExecutablePath : settings.gameExecutablePath
+  return launchExecutable(target, executablePath)
+})
+
+ipcMain.handle('get-launch-runtime-status', async () => {
+  return getLaunchRuntimeStatus()
 })
 
 ipcMain.on('open-url-in-new-tab', (event, url: string) => {
@@ -1119,6 +1281,258 @@ function clearScopedStorage(origin: string, namespace?: string | null): void {
     if (key.startsWith(prefix)) {
       webviewStore.delete(key)
     }
+  }
+}
+
+function stopLaunchState(target: LaunchTarget, child?: ChildProcess | null): void {
+  const current = launchedApps[target]
+  if (child && current.child && current.child !== child) return
+  launchedApps[target] = {
+    starting: false,
+    running: false,
+    pid: null,
+    executablePath: '',
+    child: null
+  }
+  stopLaunchRuntimeMonitorIfIdle()
+}
+
+function getLaunchRuntimeStatus(): { gameRunning: boolean; launcherRunning: boolean } {
+  return {
+    gameRunning: launchedApps.game.running || launchedApps.game.starting,
+    launcherRunning: launchedApps.launcher.running || launchedApps.launcher.starting
+  }
+}
+
+function runningMessage(target: LaunchTarget, starting: boolean): string {
+  if (starting) return target === 'game' ? '游戏正在启动中，请稍候' : '启动器正在启动中，请稍候'
+  return target === 'game' ? '游戏已在运行中' : '启动器已在运行中'
+}
+
+function launchSuccessMessage(target: LaunchTarget): string {
+  return target === 'game' ? '游戏启动成功' : '启动器已打开'
+}
+
+function hasAnyLaunchTask(): boolean {
+  return launchedApps.game.running || launchedApps.game.starting || launchedApps.launcher.running || launchedApps.launcher.starting
+}
+
+function stopLaunchRuntimeMonitorIfIdle(): void {
+  if (!launchRuntimeMonitor) return
+  if (hasAnyLaunchTask()) return
+  clearInterval(launchRuntimeMonitor)
+  launchRuntimeMonitor = null
+}
+
+function isProcessRunningByImageName(imageName: string): Promise<boolean> {
+  if (process.platform !== 'win32') return Promise.resolve(false)
+  if (!imageName.trim()) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    execFile(
+      'tasklist',
+      ['/FI', `IMAGENAME eq ${imageName}`, '/FO', 'CSV', '/NH'],
+      { windowsHide: true },
+      (error, stdout) => {
+        if (error) {
+          resolve(false)
+          return
+        }
+        const lowerStdout = String(stdout || '').toLowerCase()
+        resolve(lowerStdout.includes(`"${imageName.toLowerCase()}"`))
+      }
+    )
+  })
+}
+
+async function syncLaunchedAppState(): Promise<void> {
+  if (process.platform !== 'win32') return
+  const targets: LaunchTarget[] = ['game', 'launcher']
+  await Promise.all(
+    targets.map(async (target) => {
+      const state = launchedApps[target]
+      if (state.starting || !state.running) return
+      const imageName = path.basename(state.executablePath || '')
+      if (!imageName) return
+      const alive = await isProcessRunningByImageName(imageName)
+      if (!alive) stopLaunchState(target, state.child)
+    })
+  )
+}
+
+function ensureLaunchRuntimeMonitor(): void {
+  if (process.platform !== 'win32') return
+  if (launchRuntimeMonitor) return
+  launchRuntimeMonitor = setInterval(() => {
+    void syncLaunchedAppState()
+  }, 1800)
+}
+
+function launchErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || '')
+  const errorCode =
+    typeof error === 'object' && error !== null && 'code' in error ? String((error as { code?: unknown }).code) : ''
+  if (errorCode === 'EACCES') return '启动失败：没有执行权限，请确认选择的是可执行文件'
+  if (errorCode === 'ENOENT') return '启动失败：文件不存在，请重新配置路径'
+  if (errorCode === 'EINVAL') return '启动失败：路径参数无效，请重新配置路径'
+  if (errorCode === 'UNKNOWN') return '启动失败：系统拒绝启动该文件'
+  return message || '启动失败'
+}
+
+async function validateExecutablePath(targetPath: string): Promise<string | null> {
+  let pathStat
+  try {
+    pathStat = await stat(targetPath)
+  } catch {
+    return '启动失败：路径不存在或无法访问'
+  }
+
+  if (!pathStat.isFile()) {
+    return '启动失败：请选择可执行文件，不要选择文件夹'
+  }
+
+  const ext = path.extname(targetPath).toLowerCase()
+  if (process.platform === 'win32' && ext !== '.exe' && ext !== '.bat' && ext !== '.cmd') {
+    return '启动失败：请选择 .exe / .bat / .cmd 文件'
+  }
+  return null
+}
+
+async function launchExecutable(
+  target: LaunchTarget,
+  pathValue: string
+): Promise<{ success: boolean; message: string }> {
+  const targetPath = (pathValue || '').trim()
+  if (!targetPath) {
+    return { success: false, message: '未配置启动路径' }
+  }
+
+  const current = launchedApps[target]
+  if (current.running || current.starting) {
+    return { success: false, message: runningMessage(target, current.starting) }
+  }
+
+  const ext = path.extname(targetPath).toLowerCase()
+  if (process.platform === 'win32' && ext === '.lnk') {
+    return { success: false, message: '请直接选择 .exe 可执行文件，快捷方式无法跟踪运行状态' }
+  }
+  const pathValidationMessage = await validateExecutablePath(targetPath)
+  if (pathValidationMessage) {
+    return { success: false, message: pathValidationMessage }
+  }
+
+  launchedApps[target] = {
+    starting: true,
+    running: false,
+    pid: null,
+    executablePath: targetPath,
+    child: null
+  }
+
+  try {
+    const useShell = process.platform === 'win32' && (ext === '.bat' || ext === '.cmd')
+    const child = useShell
+      ? spawn('cmd.exe', ['/d', '/s', '/c', `"${targetPath}"`], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true
+        })
+      : spawn(targetPath, [], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true
+        })
+
+    launchedApps[target] = {
+      starting: true,
+      running: false,
+      pid: null,
+      executablePath: targetPath,
+      child
+    }
+
+    return await new Promise<{ success: boolean; message: string }>((resolve) => {
+      let settled = false
+      const timeout = setTimeout(() => {
+        stopLaunchState(target, child)
+        finish({ success: false, message: '启动失败：启动超时，请检查程序状态' })
+      }, 8000)
+
+      const finish = (result: { success: boolean; message: string }) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        resolve(result)
+      }
+
+      child.once('error', (error) => {
+        void (async () => {
+          // Some launchers/games cannot be created directly by spawn on Windows
+          // (for example EACCES), but can still be started via shell.
+          if (process.platform === 'win32') {
+            const shellResult = await shell.openPath(targetPath)
+            if (!shellResult || !shellResult.trim()) {
+              launchedApps[target] = {
+                starting: false,
+                running: true,
+                pid: null,
+                executablePath: targetPath,
+                child: null
+              }
+              ensureLaunchRuntimeMonitor()
+              finish({ success: true, message: launchSuccessMessage(target) })
+              return
+            }
+          }
+
+          stopLaunchState(target, child)
+          finish({ success: false, message: launchErrorMessage(error) })
+        })()
+      })
+
+      child.once('spawn', () => {
+        const childPid = typeof child.pid === 'number' ? child.pid : null
+        if (!childPid) {
+          stopLaunchState(target, child)
+          finish({ success: false, message: '启动失败：无法获取进程 ID' })
+          return
+        }
+
+        launchedApps[target] = {
+          starting: false,
+          running: true,
+          pid: childPid,
+          executablePath: targetPath,
+          child
+        }
+
+        child.once('exit', () => {
+          void (async () => {
+            const imageName = process.platform === 'win32' ? path.basename(targetPath || '') : ''
+            if (imageName) {
+              const alive = await isProcessRunningByImageName(imageName)
+              if (alive) {
+                launchedApps[target] = {
+                  starting: false,
+                  running: true,
+                  pid: childPid,
+                  executablePath: targetPath,
+                  child: null
+                }
+                ensureLaunchRuntimeMonitor()
+                return
+              }
+            }
+            stopLaunchState(target, child)
+          })()
+        })
+        child.unref()
+        ensureLaunchRuntimeMonitor()
+        finish({ success: true, message: launchSuccessMessage(target) })
+      })
+    })
+  } catch (error) {
+    stopLaunchState(target)
+    return { success: false, message: launchErrorMessage(error) }
   }
 }
 

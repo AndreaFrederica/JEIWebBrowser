@@ -36,6 +36,8 @@ export interface SettingsPayload {
   alwaysOnTop: boolean
   transparencyEnabled: boolean
   windowOpacity: number
+  gameExecutablePath: string
+  launcherExecutablePath: string
   homePage: string
   showBookmarksBar: boolean
   tabBarLayout: 'horizontal' | 'vertical'
