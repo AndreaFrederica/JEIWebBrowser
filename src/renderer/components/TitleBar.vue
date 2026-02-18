@@ -14,7 +14,7 @@ import {
   Settings,
   X
 } from 'lucide-vue-next'
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { INTERNAL_BOOKMARKS, INTERNAL_HISTORY, INTERNAL_HOME, INTERNAL_SETTINGS, INTERNAL_STORAGE } from '../pages/internal-home'
 import type { TabItem } from '../types/browser'
 
@@ -67,6 +67,65 @@ const opacityMenuY = ref(0)
 const opacityPresets = [1, 0.9, 0.8, 0.7, 0.6, 0.5]
 const tabMenuRef = ref<HTMLElement | null>(null)
 const opacityMenuRef = ref<HTMLElement | null>(null)
+const hoverExpanded = ref(false)
+const HOVER_EXPAND_DELAY_MS = 520
+const HOVER_COLLAPSE_DELAY_MS = 200
+let hoverExpandTimer: ReturnType<typeof setTimeout> | null = null
+let hoverCollapseTimer: ReturnType<typeof setTimeout> | null = null
+const isVerticalCollapsed = computed(() => props.tabLayout === 'vertical' && props.collapsed)
+const isIconOnlyMode = computed(() => isVerticalCollapsed.value && !hoverExpanded.value)
+
+function clearHoverTimers(): void {
+  if (hoverExpandTimer) {
+    clearTimeout(hoverExpandTimer)
+    hoverExpandTimer = null
+  }
+  if (hoverCollapseTimer) {
+    clearTimeout(hoverCollapseTimer)
+    hoverCollapseTimer = null
+  }
+}
+
+function closeHoverExpanded(): void {
+  hoverExpanded.value = false
+}
+
+function onCollapsedTabMouseEnter(): void {
+  if (!isVerticalCollapsed.value) return
+  if (hoverCollapseTimer) {
+    clearTimeout(hoverCollapseTimer)
+    hoverCollapseTimer = null
+  }
+  if (hoverExpanded.value || hoverExpandTimer) return
+  hoverExpandTimer = setTimeout(() => {
+    hoverExpandTimer = null
+    if (!isVerticalCollapsed.value) return
+    hoverExpanded.value = true
+  }, HOVER_EXPAND_DELAY_MS)
+}
+
+function onCollapsedAreaMouseEnter(): void {
+  if (!isVerticalCollapsed.value) return
+  if (hoverCollapseTimer) {
+    clearTimeout(hoverCollapseTimer)
+    hoverCollapseTimer = null
+  }
+}
+
+function onCollapsedAreaMouseLeave(): void {
+  if (hoverExpandTimer) {
+    clearTimeout(hoverExpandTimer)
+    hoverExpandTimer = null
+  }
+  if (!hoverExpanded.value) return
+  if (hoverCollapseTimer) {
+    clearTimeout(hoverCollapseTimer)
+  }
+  hoverCollapseTimer = setTimeout(() => {
+    hoverCollapseTimer = null
+    closeHoverExpanded()
+  }, HOVER_COLLAPSE_DELAY_MS)
+}
 
 function setMenuPosition(
   element: HTMLElement,
@@ -143,6 +202,8 @@ function setOpacity(value: number): void {
 function closeMenus(): void {
   closeTabMenu()
   closeOpacityMenu()
+  clearHoverTimers()
+  closeHoverExpanded()
 }
 
 function onDocumentMouseDown(event: MouseEvent): void {
@@ -172,6 +233,16 @@ function closeTabFromMenu(): void {
   closeTabMenu()
 }
 
+watch(
+  () => [props.tabLayout, props.collapsed],
+  () => {
+    if (!isVerticalCollapsed.value) {
+      clearHoverTimers()
+      closeHoverExpanded()
+    }
+  }
+)
+
 onMounted(() => {
   document.addEventListener('mousedown', onDocumentMouseDown, true)
   document.addEventListener('keydown', onDocumentKeyDown)
@@ -180,6 +251,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  clearHoverTimers()
   document.removeEventListener('mousedown', onDocumentMouseDown, true)
   document.removeEventListener('keydown', onDocumentKeyDown)
   window.removeEventListener('blur', closeMenus)
@@ -188,26 +260,23 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div id="title-bar" :class="[props.tabLayout, { collapsed: props.tabLayout === 'vertical' && props.collapsed }]">
-    <div id="tabs-area">
+  <div id="title-bar" :class="[props.tabLayout, { collapsed: isVerticalCollapsed, 'hover-expanded': hoverExpanded }]">
+    <div id="tabs-area" @mouseenter="onCollapsedAreaMouseEnter" @mouseleave="onCollapsedAreaMouseLeave">
       <div v-if="props.tabLayout === 'vertical'" id="tabs-toolbar">
         <button id="btn-toggle-collapse" :title="props.collapsed ? '展开竖排标签栏' : '折叠竖排标签栏'" @click="emit('toggleCollapse')">
           <ChevronsRight v-if="props.collapsed" :size="18" />
           <ChevronsLeft v-else :size="18" />
-        </button>
-        <button id="btn-new-tab-vertical" title="New Tab" @click="emit('newTab')">
-          <Plus :size="18" />
         </button>
       </div>
 
       <div id="tabs-container">
         <div
           v-for="tab in props.tabs"
-          :id="tab.id"
           :key="tab.id"
           class="tab"
-          :class="{ active: props.activeTabId === tab.id, iconOnly: props.tabLayout === 'vertical' && props.collapsed }"
+          :class="{ active: props.activeTabId === tab.id, iconOnly: isIconOnlyMode }"
           :title="tab.title"
+          @mouseenter="onCollapsedTabMouseEnter"
           @click="emit('switchTab', tab.id)"
           @contextmenu.prevent="openTabMenu($event, tab.id)"
         >
@@ -220,20 +289,26 @@ onBeforeUnmount(() => {
             <Database v-else-if="tab.src === INTERNAL_STORAGE" :size="14" />
             <span v-else>{{ tabInitial(tab) }}</span>
           </span>
-          <span v-if="!(props.tabLayout === 'vertical' && props.collapsed)" class="tab-title">{{ tab.title }}</span>
+          <span v-if="!isIconOnlyMode" class="tab-title">{{ tab.title }}</span>
           <span
-            v-if="!(props.tabLayout === 'vertical' && props.collapsed)"
+            v-if="!isIconOnlyMode"
             class="close-tab"
             @click.stop="emit('closeTab', tab.id)"
           >
             <X :size="14" />
           </span>
         </div>
+        <button
+          class="tab new-tab-tab"
+          :class="{ iconOnly: isIconOnlyMode }"
+          title="新建标签页"
+          @mouseenter="onCollapsedTabMouseEnter"
+          @click="emit('newTab')"
+        >
+          <span class="tab-icon internal"><Plus :size="14" /></span>
+          <span v-if="!isIconOnlyMode" class="tab-title">新建标签页</span>
+        </button>
       </div>
-
-      <button v-if="props.tabLayout === 'horizontal'" id="btn-new-tab" title="New Tab" @click="emit('newTab')">
-        <Plus :size="16" />
-      </button>
     </div>
 
     <div
@@ -311,6 +386,7 @@ onBeforeUnmount(() => {
   height: 32px;
   -webkit-app-region: drag;
   user-select: none;
+  transition: width 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 #tabs-area {
@@ -335,10 +411,9 @@ onBeforeUnmount(() => {
   -webkit-app-region: drag;
   padding-left: 10px;
   min-width: 0;
+  transition: padding 180ms ease;
 }
 
-#btn-new-tab,
-#btn-new-tab-vertical,
 #btn-toggle-collapse {
   -webkit-app-region: no-drag;
   background: none;
@@ -354,8 +429,6 @@ onBeforeUnmount(() => {
   justify-content: center;
 }
 
-#btn-new-tab:hover,
-#btn-new-tab-vertical:hover,
 #btn-toggle-collapse:hover {
   background-color: #555;
   color: #fff;
@@ -377,12 +450,58 @@ onBeforeUnmount(() => {
   font-size: 12px;
   position: relative;
   -webkit-app-region: no-drag;
+  transition:
+    width 190ms ease,
+    min-width 190ms ease,
+    max-width 190ms ease,
+    height 190ms ease,
+    padding 190ms ease,
+    border-radius 180ms ease,
+    margin 180ms ease,
+    background-color 140ms ease;
+}
+
+button.tab {
+  border: none;
+  outline: none;
+  text-align: left;
+}
+
+.new-tab-tab {
+  background: #2d2d2d;
+  min-width: 34px;
+  width: 34px;
+  max-width: 34px;
+  padding: 0;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.new-tab-tab:hover {
+  background: #3a3a3a;
+  color: #fff;
+}
+
+.new-tab-tab .tab-icon {
+  margin-right: 0;
+}
+
+.new-tab-tab:not(.iconOnly) {
+  width: auto;
+  min-width: 110px;
+  max-width: 190px;
+  padding: 0 10px;
+  justify-content: flex-start;
+}
+
+.new-tab-tab:not(.iconOnly) .tab-icon {
+  margin-right: 8px;
 }
 
 .tab-icon {
   width: 18px;
   height: 18px;
-  border-radius: 4px;
+  border-radius: 50%;
   margin-right: 8px;
   overflow: hidden;
   flex: 0 0 auto;
@@ -428,10 +547,16 @@ onBeforeUnmount(() => {
 
 .close-tab {
   margin-left: auto;
-  padding: 0 5px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
   cursor: pointer;
   font-size: 14px;
-  flex: 0 0 auto;
+  flex: 0 0 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
 }
 
 .close-tab:hover {
@@ -548,6 +673,8 @@ button svg,
   align-items: stretch;
   border-right: 1px solid #2d2d2d;
   box-sizing: border-box;
+  position: relative;
+  z-index: 80;
 }
 
 #title-bar.vertical #tabs-area {
@@ -557,7 +684,7 @@ button svg,
 }
 
 #title-bar.vertical #tabs-container {
-  padding: 4px 8px 10px;
+  padding: 0 8px;
   flex-direction: column;
   overflow-x: hidden;
   overflow-y: auto;
@@ -568,11 +695,10 @@ button svg,
   width: 100%;
   max-width: none;
   min-width: 0;
-  height: 36px;
+  height: 30px;
   margin-right: 0;
   margin-bottom: 4px;
   border-radius: 8px;
-  line-height: 36px;
   border: 1px solid transparent;
   box-sizing: border-box;
 }
@@ -584,6 +710,7 @@ button svg,
 #title-bar.vertical.collapsed {
   width: 48px;
   border-right: none;
+  overflow: visible;
 }
 
 #title-bar.vertical.collapsed #tabs-toolbar {
@@ -595,9 +722,26 @@ button svg,
   box-sizing: border-box;
 }
 
+#title-bar.vertical.collapsed.hover-expanded #tabs-toolbar {
+  padding: 8px 8px 4px;
+}
+
+#title-bar.vertical.collapsed #tabs-area {
+  overflow: visible;
+}
+
 #title-bar.vertical.collapsed #tabs-container {
-  padding: 0 0 8px;
+  padding: 0;
   align-items: center;
+  overflow-y: auto;
+  width: 100%;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  transition:
+    width 190ms ease,
+    padding 190ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease;
 }
 
 #title-bar.vertical.collapsed .tab {
@@ -623,10 +767,54 @@ button svg,
   margin: 0 6px 2px 6px;
 }
 
-#title-bar.vertical.collapsed #btn-new-tab-vertical {
-  width: 32px;
-  height: 28px;
-  margin: 0 6px 2px 6px;
+#title-bar.vertical.collapsed .new-tab-tab {
+  width: 30px;
+  min-width: 30px;
+  max-width: 30px;
+  height: 30px;
+  margin: 0 0 4px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 7px;
+}
+
+#title-bar.vertical.collapsed.hover-expanded #tabs-container {
+  width: 232px;
+  padding: 0 8px;
+  background: #333;
+  border-right: 1px solid #2d2d2d;
+  box-shadow: 10px 0 26px rgba(0, 0, 0, 0.35);
+  z-index: 120;
+  align-items: stretch;
+}
+
+#title-bar.vertical.collapsed.hover-expanded .tab {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  height: 30px;
+  margin: 0 0 4px;
+  padding: 0 10px;
+  justify-content: flex-start;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  box-sizing: border-box;
+}
+
+#title-bar.vertical.collapsed.hover-expanded .tab.active {
+  border-color: #3f3f45;
+}
+
+#title-bar.vertical.collapsed.hover-expanded .tab .tab-icon {
+  margin-right: 8px;
+}
+
+#title-bar.vertical.collapsed.hover-expanded .new-tab-tab {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  padding: 0 10px;
+  justify-content: flex-start;
 }
 
 #tab-context-menu {
